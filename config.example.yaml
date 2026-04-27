@@ -15,6 +15,16 @@ planner:
   weight_shards: 0.35
   weight_risk: 0.15
   weight_cost: 0.05
+  severe_shard_imbalance_threshold: 50
+  large_shard_size_gb: 20
+  large_shard_penalty_multiplier: 3
+  node_balance_weight_disk: 0.6
+  node_balance_weight_shards: 0.4
+  move_score_weight_disk_gap: 1.0
+  move_score_weight_shard_gap: 2.0
+  move_score_weight_size: 0.5
+  move_score_primary_penalty: 1000
+  move_score_severe_large_shard_extra_mult: 4.0
 
 limits:
   max_concurrent_moves: 2

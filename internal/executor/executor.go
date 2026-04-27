@@ -30,12 +30,18 @@ type RunOptions struct {
 }
 
 type Result struct {
-	CompletedBatches int      `json:"completed_batches"`
-	AppliedSteps     int      `json:"applied_steps"`
-	Stopped          bool     `json:"stopped"`
-	StopReason       string   `json:"stop_reason,omitempty"`
-	StopReasonCode   string   `json:"stop_reason_code,omitempty"`
-	Errors           []string `json:"errors,omitempty"`
+	CompletedBatches        int      `json:"completed_batches"`
+	AppliedSteps            int      `json:"applied_steps"`
+	TotalBatches            int      `json:"total_batches"`
+	RemainingBatches        int      `json:"remaining_batches"`
+	TotalSteps              int      `json:"total_steps"`
+	RemainingSteps          int      `json:"remaining_steps"`
+	EstimatedAdditionalRuns int      `json:"estimated_additional_runs"`
+	ExecutionID             string   `json:"execution_id,omitempty"`
+	Stopped                 bool     `json:"stopped"`
+	StopReason              string   `json:"stop_reason,omitempty"`
+	StopReasonCode          string   `json:"stop_reason_code,omitempty"`
+	Errors                  []string `json:"errors,omitempty"`
 }
 
 func Run(ctx context.Context, cfg config.Config, adapter collector.Adapter, policy safety.Layer, baseline model.ClusterSnapshot, plan model.RebalancePlan, confirm ConfirmBatchFunc) (Result, error) {
@@ -44,13 +50,21 @@ func Run(ctx context.Context, cfg config.Config, adapter collector.Adapter, poli
 
 func RunWithOptions(ctx context.Context, cfg config.Config, adapter collector.Adapter, policy safety.Layer, baseline model.ClusterSnapshot, plan model.RebalancePlan, opts RunOptions) (Result, error) {
 	batches := buildBatches(plan.Steps, cfg.Limits.MaxConcurrentMoves, cfg.Limits.MaxDataGBPerBatch)
-	result := Result{}
+	result := Result{
+		TotalBatches:     len(batches),
+		RemainingBatches: len(batches),
+		TotalSteps:       len(plan.Steps),
+		RemainingSteps:   len(plan.Steps),
+	}
 
 	for i, batch := range batches {
 		if opts.StopRequested != nil && opts.StopRequested() {
 			result.Stopped = true
 			result.StopReason = "stop requested"
 			result.StopReasonCode = "stop_requested"
+			result.RemainingBatches = len(batches) - i
+			result.RemainingSteps = result.TotalSteps - result.AppliedSteps
+			result.EstimatedAdditionalRuns = estimateAdditionalRuns(result.RemainingSteps)
 			emit(opts, Event{Type: "stopped", Batch: i + 1, Total: len(batches), ReasonCode: result.StopReasonCode, Message: result.StopReason})
 			return result, nil
 		}
@@ -66,22 +80,30 @@ func RunWithOptions(ctx context.Context, cfg config.Config, adapter collector.Ad
 				result.Stopped = true
 				result.StopReason = "operator rejected batch"
 				result.StopReasonCode = "operator_rejected"
+				result.RemainingBatches = len(batches) - i
+				result.RemainingSteps = result.TotalSteps - result.AppliedSteps
+				result.EstimatedAdditionalRuns = estimateAdditionalRuns(result.RemainingSteps)
 				emit(opts, Event{Type: "stopped", Batch: i + 1, Total: len(batches), ReasonCode: result.StopReasonCode, Message: result.StopReason})
 				return result, nil
 			}
 		}
 
-		errList := runBatch(ctx, adapter, batch, cfg.Limits.MaxConcurrentMoves, opts)
+		errList := runBatch(ctx, adapter, batch, cfg.Limits.MaxConcurrentMoves, opts, i+1, len(batches))
 		if len(errList) > 0 {
 			result.Errors = append(result.Errors, errList...)
 			result.Stopped = true
 			result.StopReason = "execution errors"
 			result.StopReasonCode = "execution_errors"
+			result.RemainingBatches = len(batches) - i
+			result.RemainingSteps = result.TotalSteps - result.AppliedSteps
+			result.EstimatedAdditionalRuns = estimateAdditionalRuns(result.RemainingSteps)
 			emit(opts, Event{Type: "stopped", Batch: i + 1, Total: len(batches), ReasonCode: result.StopReasonCode, Message: result.StopReason})
 			return result, nil
 		}
 		result.CompletedBatches++
 		result.AppliedSteps += len(batch)
+		result.RemainingBatches = len(batches) - result.CompletedBatches
+		result.RemainingSteps = result.TotalSteps - result.AppliedSteps
 		emit(opts, Event{Type: "batch_done", Batch: i + 1, Total: len(batches)})
 
 		snap, err := adapter.CollectSnapshot(ctx)
@@ -89,6 +111,9 @@ func RunWithOptions(ctx context.Context, cfg config.Config, adapter collector.Ad
 			result.Stopped = true
 			result.StopReason = fmt.Sprintf("post-batch snapshot failed: %v", err)
 			result.StopReasonCode = "post_batch_snapshot_failed"
+			result.RemainingBatches = len(batches) - result.CompletedBatches
+			result.RemainingSteps = result.TotalSteps - result.AppliedSteps
+			result.EstimatedAdditionalRuns = estimateAdditionalRuns(result.RemainingSteps)
 			emit(opts, Event{Type: "stopped", Batch: i + 1, Total: len(batches), ReasonCode: result.StopReasonCode, Message: result.StopReason})
 			return result, nil
 		}
@@ -97,6 +122,9 @@ func RunWithOptions(ctx context.Context, cfg config.Config, adapter collector.Ad
 			result.Stopped = true
 			result.StopReason = stop.Message
 			result.StopReasonCode = string(stop.Code)
+			result.RemainingBatches = len(batches) - result.CompletedBatches
+			result.RemainingSteps = result.TotalSteps - result.AppliedSteps
+			result.EstimatedAdditionalRuns = estimateAdditionalRuns(result.RemainingSteps)
 			emit(opts, Event{Type: "stopped", Batch: i + 1, Total: len(batches), ReasonCode: result.StopReasonCode, Message: result.StopReason})
 			return result, nil
 		}
@@ -108,7 +136,19 @@ func RunWithOptions(ctx context.Context, cfg config.Config, adapter collector.Ad
 			}
 		}
 	}
+	result.RemainingBatches = 0
+	result.RemainingSteps = 0
+	result.EstimatedAdditionalRuns = 0
 	return result, nil
+}
+
+func estimateAdditionalRuns(remainingSteps int) int {
+	if remainingSteps <= 0 {
+		return 0
+	}
+	// Remaining steps indicate this plan did not complete in current run.
+	// At least one more apply invocation will be required.
+	return 1
 }
 
 func buildBatches(steps []model.PlanStep, maxConcurrent int, maxDataGB float64) [][]model.PlanStep {
@@ -137,7 +177,7 @@ func buildBatches(steps []model.PlanStep, maxConcurrent int, maxDataGB float64) 
 	return batches
 }
 
-func runBatch(ctx context.Context, adapter collector.Adapter, steps []model.PlanStep, concurrency int, opts RunOptions) []string {
+func runBatch(ctx context.Context, adapter collector.Adapter, steps []model.PlanStep, concurrency int, opts RunOptions, batchNum, totalBatches int) []string {
 	sem := make(chan struct{}, concurrency)
 	var wg sync.WaitGroup
 	errCh := make(chan string, len(steps))
@@ -155,10 +195,10 @@ func runBatch(ctx context.Context, adapter collector.Adapter, steps []model.Plan
 			defer func() { <-sem }()
 			if err := adapter.ExecuteMove(ctx, step); err != nil {
 				errCh <- fmt.Sprintf("step %s/%d %s->%s failed: %v", step.Index, step.ShardID, step.FromNode, step.ToNode, err)
-				emit(opts, Event{Type: "step_failed", Step: &step, Message: err.Error()})
+				emit(opts, Event{Type: "step_failed", Step: &step, Batch: batchNum, Total: totalBatches, Message: err.Error()})
 				return
 			}
-			emit(opts, Event{Type: "step_done", Step: &step})
+			emit(opts, Event{Type: "step_done", Step: &step, Batch: batchNum, Total: totalBatches})
 		}()
 	}
 	wg.Wait()

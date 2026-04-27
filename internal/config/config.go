@@ -31,11 +31,21 @@ type ClusterConfig struct {
 }
 
 type PlannerConfig struct {
-	MaxMovesPerPlan int     `yaml:"max_moves_per_plan"`
-	WeightDisk      float64 `yaml:"weight_disk"`
-	WeightShards    float64 `yaml:"weight_shards"`
-	WeightRisk      float64 `yaml:"weight_risk"`
-	WeightCost      float64 `yaml:"weight_cost"`
+	MaxMovesPerPlan                    int     `yaml:"max_moves_per_plan"`
+	WeightDisk                         float64 `yaml:"weight_disk"`
+	WeightShards                       float64 `yaml:"weight_shards"`
+	WeightRisk                         float64 `yaml:"weight_risk"`
+	WeightCost                         float64 `yaml:"weight_cost"`
+	SevereShardImbalanceThreshold      int     `yaml:"severe_shard_imbalance_threshold"`
+	LargeShardSizeGB                   float64 `yaml:"large_shard_size_gb"`
+	LargeShardPenaltyMultiplier        float64 `yaml:"large_shard_penalty_multiplier"`
+	NodeBalanceWeightDisk              float64 `yaml:"node_balance_weight_disk"`
+	NodeBalanceWeightShards            float64 `yaml:"node_balance_weight_shards"`
+	MoveScoreWeightDiskGap             float64 `yaml:"move_score_weight_disk_gap"`
+	MoveScoreWeightShardGap            float64 `yaml:"move_score_weight_shard_gap"`
+	MoveScoreWeightSize                float64 `yaml:"move_score_weight_size"`
+	MoveScorePrimaryPenalty            float64 `yaml:"move_score_primary_penalty"`
+	MoveScoreSevereLargeShardExtraMult float64 `yaml:"move_score_severe_large_shard_extra_mult"`
 }
 
 type LimitsConfig struct {
@@ -82,11 +92,21 @@ func Default() Config {
 			TLSEnabled:       true,
 		},
 		Planner: PlannerConfig{
-			MaxMovesPerPlan: 50,
-			WeightDisk:      0.45,
-			WeightShards:    0.35,
-			WeightRisk:      0.15,
-			WeightCost:      0.05,
+			MaxMovesPerPlan:                    50,
+			WeightDisk:                         0.45,
+			WeightShards:                       0.35,
+			WeightRisk:                         0.15,
+			WeightCost:                         0.05,
+			SevereShardImbalanceThreshold:      50,
+			LargeShardSizeGB:                   20,
+			LargeShardPenaltyMultiplier:        3,
+			NodeBalanceWeightDisk:              0.6,
+			NodeBalanceWeightShards:            0.4,
+			MoveScoreWeightDiskGap:             1.0,
+			MoveScoreWeightShardGap:            2.0,
+			MoveScoreWeightSize:                0.5,
+			MoveScorePrimaryPenalty:            1000,
+			MoveScoreSevereLargeShardExtraMult: 4.0,
 		},
 		Limits: LimitsConfig{
 			MaxConcurrentMoves: 2,
@@ -141,6 +161,40 @@ func Load(path string) (Config, error) {
 	}
 	if cfg.Planner.MaxMovesPerPlan <= 0 {
 		cfg.Planner.MaxMovesPerPlan = 50
+	}
+	if cfg.Planner.SevereShardImbalanceThreshold <= 0 {
+		cfg.Planner.SevereShardImbalanceThreshold = 50
+	}
+	if cfg.Planner.LargeShardSizeGB <= 0 {
+		cfg.Planner.LargeShardSizeGB = 20
+	}
+	if cfg.Planner.LargeShardPenaltyMultiplier <= 0 {
+		cfg.Planner.LargeShardPenaltyMultiplier = 3
+	}
+	if cfg.Planner.NodeBalanceWeightDisk < 0 {
+		cfg.Planner.NodeBalanceWeightDisk = 0
+	}
+	if cfg.Planner.NodeBalanceWeightShards < 0 {
+		cfg.Planner.NodeBalanceWeightShards = 0
+	}
+	if cfg.Planner.NodeBalanceWeightDisk == 0 && cfg.Planner.NodeBalanceWeightShards == 0 {
+		cfg.Planner.NodeBalanceWeightDisk = 0.6
+		cfg.Planner.NodeBalanceWeightShards = 0.4
+	}
+	if cfg.Planner.MoveScoreWeightDiskGap < 0 {
+		cfg.Planner.MoveScoreWeightDiskGap = 1.0
+	}
+	if cfg.Planner.MoveScoreWeightShardGap < 0 {
+		cfg.Planner.MoveScoreWeightShardGap = 2.0
+	}
+	if cfg.Planner.MoveScoreWeightSize < 0 {
+		cfg.Planner.MoveScoreWeightSize = 0.5
+	}
+	if cfg.Planner.MoveScorePrimaryPenalty <= 0 {
+		cfg.Planner.MoveScorePrimaryPenalty = 1000
+	}
+	if cfg.Planner.MoveScoreSevereLargeShardExtraMult <= 0 {
+		cfg.Planner.MoveScoreSevereLargeShardExtraMult = 4.0
 	}
 	if cfg.Limits.MaxConcurrentMoves <= 0 {
 		cfg.Limits.MaxConcurrentMoves = 1

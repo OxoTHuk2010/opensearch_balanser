@@ -119,6 +119,8 @@ Safety-first rebalancer for distributed OpenSearch clusters with CLI + HTTP API.
 - `policy.execution_window_start_utc` must be `0..23`.
 - `policy.execution_window_end_utc` must be `1..24`.
 - `api.enabled` controls API startup guard.
+- `planner.large_shard_size_gb` and `planner.large_shard_penalty_multiplier` tune large-shard move avoidance.
+- `planner.severe_shard_imbalance_threshold` and `planner.move_score_weight_shard_gap` tune shard-count balancing pressure.
 
 ## Observability
 

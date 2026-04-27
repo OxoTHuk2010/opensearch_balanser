@@ -32,11 +32,11 @@ func (p Planner) Build(snapshot model.ClusterSnapshot, analysis model.AnalysisRe
 	steps := make([]model.PlanStep, 0, maxMoves)
 
 	for i := 0; i < maxMoves; i++ {
-		fromID, toID, ok := pickMostImbalancedNodes(work)
+		fromID, toID, ok := p.pickMostImbalancedNodes(work)
 		if !ok {
 			break
 		}
-		candidate, ok := pickShardToMove(work, fromID, toID)
+		candidate, ok := p.pickShardToMove(work, fromID, toID)
 		if !ok {
 			break
 		}
@@ -164,7 +164,7 @@ func (p Planner) allowedTarget(snapshot model.ClusterSnapshot, shard model.Shard
 	return true
 }
 
-func pickMostImbalancedNodes(snapshot model.ClusterSnapshot) (string, string, bool) {
+func (p Planner) pickMostImbalancedNodes(snapshot model.ClusterSnapshot) (string, string, bool) {
 	if len(snapshot.Nodes) < 2 {
 		return "", "", false
 	}
@@ -184,41 +184,104 @@ func pickMostImbalancedNodes(snapshot model.ClusterSnapshot) (string, string, bo
 	for id, n := range snapshot.Nodes {
 		arr = append(arr, pair{id: id, diskUsed: n.DiskUsedPercent(), shards: counts[id]})
 	}
-	sort.Slice(arr, func(i, j int) bool { return arr[i].diskUsed > arr[j].diskUsed })
+	maxDisk := 0.0
+	maxShards := 0
+	for _, p := range arr {
+		if p.diskUsed > maxDisk {
+			maxDisk = p.diskUsed
+		}
+		if p.shards > maxShards {
+			maxShards = p.shards
+		}
+	}
+	score := func(pn pair) float64 {
+		diskNorm := 0.0
+		if maxDisk > 0 {
+			diskNorm = pn.diskUsed / maxDisk
+		}
+		shardNorm := 0.0
+		if maxShards > 0 {
+			shardNorm = float64(pn.shards) / float64(maxShards)
+		}
+		return p.cfg.Planner.NodeBalanceWeightDisk*diskNorm + p.cfg.Planner.NodeBalanceWeightShards*shardNorm
+	}
+	sort.Slice(arr, func(i, j int) bool { return score(arr[i]) > score(arr[j]) })
 	from := arr[0]
-	to := arr[len(arr)-1]
+	sort.Slice(arr, func(i, j int) bool { return score(arr[i]) < score(arr[j]) })
+	to := arr[0]
 	if from.diskUsed-to.diskUsed < 1 && from.shards-to.shards <= 1 {
+		return "", "", false
+	}
+	if from.id == to.id {
 		return "", "", false
 	}
 	return from.id, to.id, true
 }
 
-func pickShardToMove(snapshot model.ClusterSnapshot, fromNodeID, toNodeID string) (model.Shard, bool) {
+func (p Planner) pickShardToMove(snapshot model.ClusterSnapshot, fromNodeID, toNodeID string) (model.Shard, bool) {
 	candidates := make([]model.Shard, 0)
 	for _, s := range snapshot.Shards {
 		if s.NodeID == fromNodeID {
 			candidates = append(candidates, s)
 		}
 	}
-	sort.Slice(candidates, func(i, j int) bool {
-		if candidates[i].Primary != candidates[j].Primary {
-			return !candidates[i].Primary
-		}
-		return candidates[i].SizeGB < candidates[j].SizeGB
-	})
+	counts := map[string]int{}
+	for id := range snapshot.Nodes {
+		counts[id] = 0
+	}
+	for _, s := range snapshot.Shards {
+		counts[s.NodeID]++
+	}
+	fromCount := counts[fromNodeID]
+	toCount := counts[toNodeID]
+	shardImbalance := fromCount - toCount
+	severeShardImbalance := shardImbalance > p.cfg.Planner.SevereShardImbalanceThreshold
+
+	bestScore := math.MaxFloat64
+	best := model.Shard{}
+	found := false
 	for _, c := range candidates {
 		if c.State != "STARTED" && c.State != "RELOCATING" {
 			continue
 		}
+		alreadyOnTarget := false
 		for _, s := range snapshot.Shards {
 			if s.Index == c.Index && s.ShardID == c.ShardID && s.NodeID == toNodeID {
-				goto next
+				alreadyOnTarget = true
+				break
 			}
 		}
-		return c, true
-	next:
+		if alreadyOnTarget {
+			continue
+		}
+		afterDiskGap := math.Abs(estimateDiskPct(snapshot.Nodes[fromNodeID], -c.SizeGB) - estimateDiskPct(snapshot.Nodes[toNodeID], c.SizeGB))
+		afterShardGap := math.Abs(float64((fromCount - 1) - (toCount + 1)))
+		primaryPenalty := 0.0
+		if c.Primary {
+			primaryPenalty = p.cfg.Planner.MoveScorePrimaryPenalty
+		}
+		sizePenalty := c.SizeGB * p.cfg.Planner.LargeShardPenaltyMultiplier
+		if c.SizeGB < p.cfg.Planner.LargeShardSizeGB {
+			sizePenalty = c.SizeGB
+		}
+		if severeShardImbalance && c.SizeGB >= p.cfg.Planner.LargeShardSizeGB {
+			// Under strong shard-count imbalance, strongly avoid large-shard moves.
+			sizePenalty = c.SizeGB * p.cfg.Planner.LargeShardPenaltyMultiplier * p.cfg.Planner.MoveScoreSevereLargeShardExtraMult
+		}
+		score := primaryPenalty +
+			afterDiskGap*p.cfg.Planner.MoveScoreWeightDiskGap +
+			afterShardGap*p.cfg.Planner.MoveScoreWeightShardGap +
+			sizePenalty*p.cfg.Planner.MoveScoreWeightSize
+		if score < bestScore {
+			bestScore = score
+			best = c
+			found = true
+		}
 	}
-	return model.Shard{}, false
+	if !found {
+		return model.Shard{}, false
+	}
+	return best, true
 }
 
 func applyMove(snapshot *model.ClusterSnapshot, step model.PlanStep) {

@@ -40,3 +40,51 @@ func TestBuildProducesMoves(t *testing.T) {
 		t.Fatalf("expected at least one move")
 	}
 }
+
+func TestBuildPrefersSmallShardMovesUnderSevereShardImbalance(t *testing.T) {
+	cfg := config.Default()
+	cfg.Planner.MaxMovesPerPlan = 1
+	p := New(cfg)
+
+	shards := make([]model.Shard, 0, 120)
+	for i := 0; i < 100; i++ {
+		shards = append(shards, model.Shard{
+			Index:   "small",
+			ShardID: i,
+			Primary: false,
+			NodeID:  "a",
+			SizeGB:  1,
+			State:   "STARTED",
+		})
+	}
+	shards = append(shards,
+		model.Shard{Index: "big", ShardID: 0, Primary: false, NodeID: "b", SizeGB: 50, State: "STARTED"},
+		model.Shard{Index: "big", ShardID: 1, Primary: false, NodeID: "b", SizeGB: 50, State: "STARTED"},
+	)
+
+	snap := model.ClusterSnapshot{
+		ID:     "s2",
+		Health: model.ClusterHealth{Status: "green"},
+		Nodes: map[string]model.Node{
+			"a": {ID: "a", Zone: "z1", DiskTotalGB: 200, DiskUsedGB: 100},
+			"b": {ID: "b", Zone: "z2", DiskTotalGB: 200, DiskUsedGB: 100},
+			"c": {ID: "c", Zone: "z3", DiskTotalGB: 200, DiskUsedGB: 20},
+		},
+		Shards:     shards,
+		Watermarks: model.Watermarks{HighPercent: 95},
+	}
+
+	pl, err := p.Build(snap, model.AnalysisResult{Score: model.Score{DiskSkewPct: 100, ShardSkewPct: 100}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(pl.Steps) == 0 {
+		t.Fatalf("expected at least one move")
+	}
+	if pl.Steps[0].FromNode != "a" {
+		t.Fatalf("expected move from shard-heavy node a, got %+v", pl.Steps[0])
+	}
+	if pl.Steps[0].EstimatedCost.NetworkGB > 5 {
+		t.Fatalf("expected small-shard move, got %.2f GB", pl.Steps[0].EstimatedCost.NetworkGB)
+	}
+}

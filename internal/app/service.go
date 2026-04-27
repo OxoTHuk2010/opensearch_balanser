@@ -116,7 +116,43 @@ func (s Service) Apply(ctx context.Context, bundle model.PlanBundle) (executor.R
 	if !preflight.Allowed {
 		return executor.Result{}, fmt.Errorf("%s: %s", preflight.Code, preflight.Message)
 	}
+
+	execID := NewID("exec")
+	corrID := NewID("corr")
+	exec := model.Execution{
+		ID:            execID,
+		CorrelationID: corrID,
+		Mode:          "apply-cli",
+		Status:        model.ExecutionRunning,
+		CreatedAt:     time.Now().UTC(),
+		UpdatedAt:     time.Now().UTC(),
+		SnapshotID:    bundle.Plan.SnapshotID,
+		Plan:          bundle.Plan,
+		Simulation:    bundle.Simulation,
+	}
+	persistEnabled := true
+	if err := s.store.Create(exec); err != nil {
+		persistEnabled = false
+		s.rt.Logger.Error("cli_execution_store_create_failed", map[string]any{"error": err.Error()})
+	}
+	s.rt.Logger.Info("cli_apply_started", map[string]any{
+		"execution_id":     execID,
+		"correlation_id":   corrID,
+		"total_steps":      len(bundle.Plan.Steps),
+		"plan_snapshot_id": bundle.Plan.SnapshotID,
+	})
+
 	confirm := func(batch int, total int, steps []model.PlanStep) (bool, error) {
+		remainingAfterCurrent := total - batch
+		fmt.Printf("\nBatch %d/%d: %d step(s)\n", batch, total, len(steps))
+		for _, step := range steps {
+			role := "replica"
+			if step.Primary {
+				role = "primary"
+			}
+			fmt.Printf("  - %s/%d (%s) %s -> %s, size=%.2fGB\n", step.Index, step.ShardID, role, step.FromNode, step.ToNode, step.EstimatedCost.NetworkGB)
+		}
+		fmt.Printf("After this batch: remaining batches = %d\n", remainingAfterCurrent)
 		fmt.Printf("Approve batch %d/%d (%d step(s))? [y/N]: ", batch, total, len(steps))
 		in := bufio.NewReader(os.Stdin)
 		line, err := in.ReadString('\n')
@@ -129,15 +165,98 @@ func (s Service) Apply(ctx context.Context, bundle model.PlanBundle) (executor.R
 	if !s.cfg.Runtime.RequireManualApproval {
 		confirm = nil
 	}
-	res, err := executor.Run(ctx, s.cfg, s.adapter, s.safety, fresh, bundle.Plan, confirm)
+	hooks := executor.RunOptions{
+		Confirm: confirm,
+		OnEvent: func(ev executor.Event) {
+			fields := map[string]any{
+				"execution_id": execID,
+				"event":        ev.Type,
+				"batch":        ev.Batch,
+				"total":        ev.Total,
+				"message":      ev.Message,
+				"reason_code":  ev.ReasonCode,
+			}
+			if ev.Step != nil {
+				fields["step_ref"] = fmt.Sprintf("%s/%d:%s->%s", ev.Step.Index, ev.Step.ShardID, ev.Step.FromNode, ev.Step.ToNode)
+			}
+			s.rt.Logger.Info("cli_apply_event", fields)
+			if !persistEnabled {
+				return
+			}
+			current, ok, err := s.store.Get(execID)
+			if err != nil || !ok {
+				return
+			}
+			current.CurrentBatch = ev.Batch
+			current.TotalBatches = ev.Total
+			if ev.Type == "step_done" {
+				current.AppliedSteps++
+			}
+			if ev.Type == "stopped" {
+				current.StopReasonCode = ev.ReasonCode
+				current.StopReason = ev.Message
+			}
+			current.AuditTrail = append(current.AuditTrail, model.AuditRecord{
+				At:          time.Now().UTC(),
+				ExecutionID: current.ID,
+				Batch:       ev.Batch,
+				Action:      ev.Type,
+				Result:      ev.Type,
+				Reason:      ev.Message,
+			})
+			if ev.Step != nil {
+				last := len(current.AuditTrail) - 1
+				current.AuditTrail[last].StepRef = fmt.Sprintf("%s/%d:%s->%s", ev.Step.Index, ev.Step.ShardID, ev.Step.FromNode, ev.Step.ToNode)
+			}
+			_ = s.store.Update(current)
+		},
+	}
+	res, err := executor.RunWithOptions(ctx, s.cfg, s.adapter, s.safety, fresh, bundle.Plan, hooks)
 	if err != nil {
+		if persistEnabled {
+			exec.Status = model.ExecutionFailed
+			exec.StopReasonCode = "executor_run_error"
+			exec.StopReason = err.Error()
+			exec.Errors = append(exec.Errors, err.Error())
+			_ = s.store.Update(exec)
+		}
 		return executor.Result{}, err
 	}
+	res.ExecutionID = execID
 	if res.Stopped {
 		s.rt.Metrics.Inc("executor_runs_total", map[string]string{"result": "stopped"})
 	} else {
 		s.rt.Metrics.Inc("executor_runs_total", map[string]string{"result": "completed"})
 	}
+	if persistEnabled {
+		current, ok, err := s.store.Get(execID)
+		if err == nil && ok {
+			current.AppliedSteps = res.AppliedSteps
+			current.CurrentBatch = res.CompletedBatches
+			current.TotalBatches = res.TotalBatches
+			current.StopReason = res.StopReason
+			current.StopReasonCode = res.StopReasonCode
+			current.Errors = append(current.Errors, res.Errors...)
+			if res.Stopped {
+				current.Status = model.ExecutionStopped
+			} else {
+				current.Status = model.ExecutionCompleted
+			}
+			_ = s.store.Update(current)
+		}
+	}
+	s.rt.Logger.Info("cli_apply_finished", map[string]any{
+		"execution_id":      execID,
+		"correlation_id":    corrID,
+		"applied_steps":     res.AppliedSteps,
+		"total_steps":       res.TotalSteps,
+		"remaining_steps":   res.RemainingSteps,
+		"completed_batches": res.CompletedBatches,
+		"total_batches":     res.TotalBatches,
+		"remaining_batches": res.RemainingBatches,
+		"stopped":           res.Stopped,
+		"stop_reason_code":  res.StopReasonCode,
+	})
 	return res, nil
 }
 
