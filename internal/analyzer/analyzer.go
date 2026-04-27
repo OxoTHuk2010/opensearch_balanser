@@ -82,11 +82,11 @@ func Analyze(snapshot model.ClusterSnapshot, opt Options) model.AnalysisResult {
 			if !ok {
 				continue
 			}
-			zone := n.Zone
-			if zone == "" {
-				zone = "unknown"
+			domain := faultDomain(n)
+			if domain == "" {
+				continue
 			}
-			zoneSet[zone] = true
+			zoneSet[domain] = true
 		}
 		if len(copies) > 1 && len(zoneSet) == 1 {
 			findings = append(findings, model.Finding{
@@ -148,4 +148,20 @@ func pctSkew(values []float64) float64 {
 		return 0
 	}
 	return ((maxV - minV) / maxV) * 100
+}
+
+func faultDomain(n model.Node) string {
+	if n.Zone != "" {
+		return "zone:" + n.Zone
+	}
+	if n.Rack != "" {
+		return "rack:" + n.Rack
+	}
+	if n.Host != "" {
+		return "host:" + n.Host
+	}
+	if n.IP != "" {
+		return "ip:" + n.IP
+	}
+	return ""
 }

@@ -164,8 +164,16 @@ func (p Planner) allowedTarget(snapshot model.ClusterSnapshot, shard model.Shard
 	if target.DiskTotalGB <= 0 {
 		return false
 	}
+	threshold := snapshot.Watermarks.LowPercent
+	if threshold <= 0 {
+		threshold = snapshot.Watermarks.HighPercent
+	}
+	if threshold <= 0 {
+		threshold = 85
+	}
 	after := estimateDiskPct(target, shard.SizeGB)
-	if after >= snapshot.Watermarks.HighPercent {
+	// Allocator may reject incoming allocation when target is above low watermark.
+	if after >= threshold {
 		return false
 	}
 	for _, s := range snapshot.Shards {

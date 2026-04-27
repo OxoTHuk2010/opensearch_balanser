@@ -39,3 +39,24 @@ func TestAnalyzeDetectsDiskSkewAndFaultDomainViolation(t *testing.T) {
 		t.Fatalf("expected fault domain finding")
 	}
 }
+
+func TestAnalyzeDoesNotFlagUnknownZoneWhenHostsDiffer(t *testing.T) {
+	snap := model.ClusterSnapshot{
+		Health: model.ClusterHealth{Status: "green"},
+		Nodes: map[string]model.Node{
+			"n1": {ID: "n1", Host: "host-a"},
+			"n2": {ID: "n2", Host: "host-b"},
+		},
+		Shards: []model.Shard{
+			{Index: "i", ShardID: 0, Primary: true, NodeID: "n1", ReplicaID: "i/0"},
+			{Index: "i", ShardID: 0, Primary: false, NodeID: "n2", ReplicaID: "i/0"},
+		},
+	}
+
+	res := Analyze(snap, Options{})
+	for _, f := range res.Findings {
+		if f.Type == "fault_domain_violation" {
+			t.Fatalf("did not expect fault_domain_violation with different hosts and empty zone/rack")
+		}
+	}
+}

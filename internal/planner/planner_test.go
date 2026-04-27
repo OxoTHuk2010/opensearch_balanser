@@ -118,3 +118,36 @@ func TestBuildSkipsTinyShards(t *testing.T) {
 		t.Fatalf("expected tiny shard to be skipped")
 	}
 }
+
+func TestBuildAvoidsTargetsAboveLowWatermark(t *testing.T) {
+	cfg := config.Default()
+	cfg.Planner.MaxMovesPerPlan = 2
+	p := New(cfg)
+	snap := model.ClusterSnapshot{
+		ID:     "s4",
+		Health: model.ClusterHealth{Status: "green"},
+		Nodes: map[string]model.Node{
+			"a": {ID: "a", Zone: "z1", DiskTotalGB: 100, DiskUsedGB: 90},
+			"b": {ID: "b", Zone: "z2", DiskTotalGB: 100, DiskUsedGB: 86},
+			"c": {ID: "c", Zone: "z3", DiskTotalGB: 100, DiskUsedGB: 40},
+		},
+		Shards: []model.Shard{
+			{Index: "i", ShardID: 0, Primary: false, NodeID: "a", SizeGB: 2, State: "STARTED"},
+			{Index: "i", ShardID: 1, Primary: false, NodeID: "a", SizeGB: 2, State: "STARTED"},
+		},
+		Watermarks: model.Watermarks{LowPercent: 85, HighPercent: 90},
+	}
+
+	pl, err := p.Build(snap, model.AnalysisResult{Score: model.Score{DiskSkewPct: 100, ShardSkewPct: 100}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(pl.Steps) == 0 {
+		t.Fatalf("expected non-empty plan")
+	}
+	for _, st := range pl.Steps {
+		if st.ToNode == "b" {
+			t.Fatalf("expected planner to avoid low-watermark saturated node b")
+		}
+	}
+}
