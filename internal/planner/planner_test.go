@@ -151,3 +151,36 @@ func TestBuildAvoidsTargetsAboveLowWatermark(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildPrefersLargerMoveWhenSourceUnderTargetFreePressure(t *testing.T) {
+	cfg := config.Default()
+	cfg.Planner.MaxMovesPerPlan = 1
+	cfg.Planner.TargetFreeGBPerNode = 40
+	cfg.Planner.PressureMinShardSizeGB = 0.5
+	cfg.Planner.MoveScorePressureSizeReward = 6
+	p := New(cfg)
+	snap := model.ClusterSnapshot{
+		ID:     "s5",
+		Health: model.ClusterHealth{Status: "green"},
+		Nodes: map[string]model.Node{
+			"a": {ID: "a", Zone: "z1", DiskTotalGB: 100, DiskUsedGB: 90}, // free=10, needs +30GB
+			"b": {ID: "b", Zone: "z2", DiskTotalGB: 100, DiskUsedGB: 30},
+		},
+		Shards: []model.Shard{
+			{Index: "small", ShardID: 0, Primary: false, NodeID: "a", SizeGB: 1, State: "STARTED"},
+			{Index: "big", ShardID: 1, Primary: false, NodeID: "a", SizeGB: 20, State: "STARTED"},
+		},
+		Watermarks: model.Watermarks{LowPercent: 85, HighPercent: 90},
+	}
+
+	pl, err := p.Build(snap, model.AnalysisResult{Score: model.Score{DiskSkewPct: 100, ShardSkewPct: 100}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(pl.Steps) == 0 {
+		t.Fatalf("expected non-empty plan")
+	}
+	if pl.Steps[0].Index != "big" {
+		t.Fatalf("expected pressure-aware larger move, got %+v", pl.Steps[0])
+	}
+}

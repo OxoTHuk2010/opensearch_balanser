@@ -47,6 +47,10 @@ type PlannerConfig struct {
 	MoveScorePrimaryPenalty            float64 `yaml:"move_score_primary_penalty"`
 	MoveScoreSevereLargeShardExtraMult float64 `yaml:"move_score_severe_large_shard_extra_mult"`
 	MinMoveShardSizeGB                 float64 `yaml:"min_move_shard_size_gb"`
+	TargetFreeGBPerNode                float64 `yaml:"target_free_gb_per_node"`
+	NodeBalanceWeightPressure          float64 `yaml:"node_balance_weight_pressure"`
+	PressureMinShardSizeGB             float64 `yaml:"pressure_min_shard_size_gb"`
+	MoveScorePressureSizeReward        float64 `yaml:"move_score_pressure_size_reward"`
 }
 
 type LimitsConfig struct {
@@ -109,6 +113,10 @@ func Default() Config {
 			MoveScorePrimaryPenalty:            1000,
 			MoveScoreSevereLargeShardExtraMult: 4.0,
 			MinMoveShardSizeGB:                 0.01,
+			TargetFreeGBPerNode:                300,
+			NodeBalanceWeightPressure:          1.2,
+			PressureMinShardSizeGB:             0.5,
+			MoveScorePressureSizeReward:        4.0,
 		},
 		Limits: LimitsConfig{
 			MaxConcurrentMoves: 2,
@@ -200,6 +208,18 @@ func Load(path string) (Config, error) {
 	}
 	if cfg.Planner.MinMoveShardSizeGB < 0 {
 		cfg.Planner.MinMoveShardSizeGB = 0.01
+	}
+	if cfg.Planner.TargetFreeGBPerNode < 0 {
+		cfg.Planner.TargetFreeGBPerNode = 300
+	}
+	if cfg.Planner.NodeBalanceWeightPressure < 0 {
+		cfg.Planner.NodeBalanceWeightPressure = 1.2
+	}
+	if cfg.Planner.PressureMinShardSizeGB < 0 {
+		cfg.Planner.PressureMinShardSizeGB = 0.5
+	}
+	if cfg.Planner.MoveScorePressureSizeReward < 0 {
+		cfg.Planner.MoveScorePressureSizeReward = 4.0
 	}
 	if cfg.Limits.MaxConcurrentMoves <= 0 {
 		cfg.Limits.MaxConcurrentMoves = 1

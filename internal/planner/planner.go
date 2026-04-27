@@ -226,7 +226,17 @@ func (p Planner) pickSourceNodes(snapshot model.ClusterSnapshot) []string {
 		if maxShards > 0 {
 			shardNorm = float64(pn.shards) / float64(maxShards)
 		}
-		return p.cfg.Planner.NodeBalanceWeightDisk*diskNorm + p.cfg.Planner.NodeBalanceWeightShards*shardNorm
+		pressureNorm := 0.0
+		if p.cfg.Planner.TargetFreeGBPerNode > 0 {
+			free := snapshot.Nodes[pn.id].DiskTotalGB - snapshot.Nodes[pn.id].DiskUsedGB
+			deficit := p.cfg.Planner.TargetFreeGBPerNode - free
+			if deficit > 0 {
+				pressureNorm = deficit / p.cfg.Planner.TargetFreeGBPerNode
+			}
+		}
+		return p.cfg.Planner.NodeBalanceWeightDisk*diskNorm +
+			p.cfg.Planner.NodeBalanceWeightShards*shardNorm +
+			p.cfg.Planner.NodeBalanceWeightPressure*pressureNorm
 	}
 	sort.Slice(arr, func(i, j int) bool { return score(arr[i]) > score(arr[j]) })
 	if len(arr) < 2 {
@@ -314,6 +324,15 @@ func (p Planner) pickShardToMove(snapshot model.ClusterSnapshot, fromNodeID, toN
 	toCount := counts[toNodeID]
 	shardImbalance := fromCount - toCount
 	severeShardImbalance := shardImbalance > p.cfg.Planner.SevereShardImbalanceThreshold
+	sourceNode := snapshot.Nodes[fromNodeID]
+	sourceFreeGB := sourceNode.DiskTotalGB - sourceNode.DiskUsedGB
+	sourcePressureGB := 0.0
+	if p.cfg.Planner.TargetFreeGBPerNode > 0 {
+		sourcePressureGB = p.cfg.Planner.TargetFreeGBPerNode - sourceFreeGB
+		if sourcePressureGB < 0 {
+			sourcePressureGB = 0
+		}
+	}
 
 	bestScore := math.MaxFloat64
 	best := model.Shard{}
@@ -323,6 +342,9 @@ func (p Planner) pickShardToMove(snapshot model.ClusterSnapshot, fromNodeID, toN
 			continue
 		}
 		if c.SizeGB < p.cfg.Planner.MinMoveShardSizeGB {
+			continue
+		}
+		if sourcePressureGB > 0 && c.SizeGB < p.cfg.Planner.PressureMinShardSizeGB {
 			continue
 		}
 		alreadyOnTarget := false
@@ -353,6 +375,10 @@ func (p Planner) pickShardToMove(snapshot model.ClusterSnapshot, fromNodeID, toN
 			afterDiskGap*p.cfg.Planner.MoveScoreWeightDiskGap +
 			afterShardGap*p.cfg.Planner.MoveScoreWeightShardGap +
 			sizePenalty*p.cfg.Planner.MoveScoreWeightSize
+		if sourcePressureGB > 0 {
+			usefulDrain := math.Min(c.SizeGB, sourcePressureGB)
+			score -= usefulDrain * p.cfg.Planner.MoveScorePressureSizeReward
+		}
 		if score < bestScore {
 			bestScore = score
 			best = c

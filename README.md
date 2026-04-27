@@ -122,6 +122,8 @@ Safety-first rebalancer for distributed OpenSearch clusters with CLI + HTTP API.
 - `planner.large_shard_size_gb` and `planner.large_shard_penalty_multiplier` tune large-shard move avoidance.
 - `planner.severe_shard_imbalance_threshold` and `planner.move_score_weight_shard_gap` tune shard-count balancing pressure.
 - `planner.min_move_shard_size_gb` skips negligible shard moves that do not materially improve balance.
+- `planner.target_free_gb_per_node` sets desired free disk per node (for example `300` GB).
+- `planner.node_balance_weight_pressure`, `planner.pressure_min_shard_size_gb`, and `planner.move_score_pressure_size_reward` tune aggressive drain behavior for overloaded nodes.
 - Set `policy.allow_yellow: true` to permit apply in yellow health; red remains blocked.
 
 ## Observability
