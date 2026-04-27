@@ -1,0 +1,5 @@
+/bin/
+*.exe
+*.test
+plan-bundle.json
+emergency-plan-bundle.json

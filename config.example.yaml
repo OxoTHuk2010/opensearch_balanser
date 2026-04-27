@@ -1,0 +1,47 @@
+cluster:
+  backend: opensearch
+  endpoint: https://opensearch.example.internal:9200
+  username: balancer
+  password_env: OPENSEARCH_PASSWORD
+  tls_enabled: true
+  skip_tls_verify: false
+  ca_file: /etc/pki/opensearch/ca.pem
+  request_timeout: 15s
+  max_active_recoveries: 20
+
+planner:
+  max_moves_per_plan: 50
+  weight_disk: 0.45
+  weight_shards: 0.35
+  weight_risk: 0.15
+  weight_cost: 0.05
+
+limits:
+  max_concurrent_moves: 2
+  max_data_gb_per_batch: 100
+  cooldown_seconds: 10
+  max_churn_per_run: 200
+
+policy:
+  allow_yellow: false
+  critical_disk_percent: 92
+  stop_on_health_degrade: true
+  stop_on_watermark_breach: true
+  enforce_execution_window: false
+  execution_window_start_utc: 0
+  execution_window_end_utc: 24
+
+runtime:
+  require_manual_approval: true
+  check_allocator: true
+  data_dir: ./data
+
+api:
+  enabled: true
+  listen: :8080
+  read_timeout: 15s
+  write_timeout: 60s
+
+observability:
+  audit_sink_path: ./data/audit.log
+  log_level: info
