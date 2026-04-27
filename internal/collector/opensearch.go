@@ -89,7 +89,8 @@ func (a *OpenSearchAdapter) CollectSnapshot(ctx context.Context) (model.ClusterS
 		return model.ClusterSnapshot{}, fmt.Errorf("parse nodes topology: %w", err)
 	}
 
-	shardsResp, err := a.get(ctx, "/_cat/shards?format=json&bytes=gb&h=index,shard,prirep,state,node,store")
+	// Keep native units for shard store to avoid rounding tiny shards to 0 when bytes=gb.
+	shardsResp, err := a.get(ctx, "/_cat/shards?format=json&h=index,shard,prirep,state,node,store")
 	if err != nil {
 		return model.ClusterSnapshot{}, err
 	}

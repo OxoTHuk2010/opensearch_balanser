@@ -47,14 +47,16 @@ func (p Planner) Build(snapshot model.ClusterSnapshot, analysis model.AnalysisRe
 			continue
 		}
 		step := p.makeStep(candidate, fromNode, toNode)
-		steps = append(steps, step)
-		applyMove(&work, step)
-
-		after := computeScore(work)
+		candidateWork := model.CloneSnapshot(work)
+		applyMove(&candidateWork, step)
+		after := computeScore(candidateWork)
 		if improvement(before, after) <= 0 {
-			steps = steps[:len(steps)-1]
-			break
+			// Don't stop planning on one bad candidate; keep searching in other nodes.
+			markNodeAsUnmovable(&work, fromID)
+			continue
 		}
+		steps = append(steps, step)
+		work = candidateWork
 		before = after
 	}
 

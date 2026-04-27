@@ -144,13 +144,24 @@ func (s Service) Apply(ctx context.Context, bundle model.PlanBundle) (executor.R
 
 	confirm := func(batch int, total int, steps []model.PlanStep) (bool, error) {
 		remainingAfterCurrent := total - batch
+		formatSize := func(gb float64) string {
+			if gb >= 0.01 {
+				return fmt.Sprintf("%.2fGB", gb)
+			}
+			mb := gb * 1024
+			if mb >= 0.01 {
+				return fmt.Sprintf("%.2fMB", mb)
+			}
+			kb := mb * 1024
+			return fmt.Sprintf("%.2fKB", kb)
+		}
 		fmt.Printf("\nBatch %d/%d: %d step(s)\n", batch, total, len(steps))
 		for _, step := range steps {
 			role := "replica"
 			if step.Primary {
 				role = "primary"
 			}
-			fmt.Printf("  - %s/%d (%s) %s -> %s, size=%.2fGB\n", step.Index, step.ShardID, role, step.FromNode, step.ToNode, step.EstimatedCost.NetworkGB)
+			fmt.Printf("  - %s/%d (%s) %s -> %s, size=%s\n", step.Index, step.ShardID, role, step.FromNode, step.ToNode, formatSize(step.EstimatedCost.NetworkGB))
 		}
 		fmt.Printf("After this batch: remaining batches = %d\n", remainingAfterCurrent)
 		fmt.Printf("Approve batch %d/%d (%d step(s))? [y/N]: ", batch, total, len(steps))
