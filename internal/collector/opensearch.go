@@ -179,18 +179,11 @@ func (a *OpenSearchAdapter) CollectSnapshot(ctx context.Context) (model.ClusterS
 }
 
 func (a *OpenSearchAdapter) ValidateMove(ctx context.Context, step model.PlanStep) (model.AllocatorCheck, error) {
-	body := map[string]any{
-		"commands": []any{map[string]any{"move": map[string]any{
-			"index":     step.Index,
-			"shard":     step.ShardID,
-			"from_node": step.FromNode,
-			"to_node":   step.ToNode,
-		}}},
-		"dry_run": true,
-		"explain": true,
+	stepRef := fmt.Sprintf("%s/%d:%s->%s", step.Index, step.ShardID, step.FromNode, step.ToNode)
+	resp, err := a.rerouteDryRun(ctx, step, true)
+	if err != nil && isExplainUnsupported(err) {
+		resp, err = a.rerouteDryRun(ctx, step, false)
 	}
-	b, _ := json.Marshal(body)
-	resp, err := a.post(ctx, "/_cluster/reroute", b)
 	if err != nil {
 		return model.AllocatorCheck{}, err
 	}
@@ -199,7 +192,6 @@ func (a *OpenSearchAdapter) ValidateMove(ctx context.Context, step model.PlanSte
 	if err := json.Unmarshal(resp, &parsed); err != nil {
 		return model.AllocatorCheck{}, fmt.Errorf("parse reroute dry-run: %w", err)
 	}
-	stepRef := fmt.Sprintf("%s/%d:%s->%s", step.Index, step.ShardID, step.FromNode, step.ToNode)
 	if e, ok := parsed["explanations"]; ok {
 		s := fmt.Sprintf("%v", e)
 		if strings.Contains(strings.ToLower(s), "no") || strings.Contains(strings.ToLower(s), "cannot") {
@@ -207,6 +199,29 @@ func (a *OpenSearchAdapter) ValidateMove(ctx context.Context, step model.PlanSte
 		}
 	}
 	return model.AllocatorCheck{StepRef: stepRef, Allowed: true, Allocator: "opensearch"}, nil
+}
+
+func (a *OpenSearchAdapter) rerouteDryRun(ctx context.Context, step model.PlanStep, explain bool) ([]byte, error) {
+	body := map[string]any{
+		"commands": []any{map[string]any{"move": map[string]any{
+			"index":     step.Index,
+			"shard":     step.ShardID,
+			"from_node": step.FromNode,
+			"to_node":   step.ToNode,
+		}}},
+		"dry_run": true,
+	}
+	if explain {
+		body["explain"] = true
+	}
+	b, _ := json.Marshal(body)
+	return a.post(ctx, "/_cluster/reroute", b)
+}
+
+func isExplainUnsupported(err error) bool {
+	// Older OpenSearch versions reject unknown field [explain] for _cluster/reroute.
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "unknown field [explain]")
 }
 
 func (a *OpenSearchAdapter) ExecuteMove(ctx context.Context, step model.PlanStep) error {
