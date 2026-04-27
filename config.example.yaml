@@ -25,6 +25,7 @@ planner:
   move_score_weight_size: 0.5
   move_score_primary_penalty: 1000
   move_score_severe_large_shard_extra_mult: 4.0
+  min_move_shard_size_gb: 0.01
 
 limits:
   max_concurrent_moves: 2

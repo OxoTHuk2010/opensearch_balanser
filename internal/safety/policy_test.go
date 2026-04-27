@@ -43,6 +43,19 @@ func TestShouldStopOnDegrade(t *testing.T) {
 	}
 }
 
+func TestShouldNotStopOnYellowWhenAllowYellow(t *testing.T) {
+	cfg := config.Default()
+	cfg.Policy.StopOnHealthDegrade = true
+	cfg.Policy.AllowYellow = true
+	layer := New(cfg)
+	baseline := model.ClusterSnapshot{Health: model.ClusterHealth{Status: "green"}}
+	snap := model.ClusterSnapshot{Health: model.ClusterHealth{Status: "yellow"}}
+	stop := layer.ShouldStopDetailed(snap, baseline)
+	if stop.Stop {
+		t.Fatalf("expected yellow degrade to be allowed, got %+v", stop)
+	}
+}
+
 func TestShouldNotStopIfNodeAlreadyAboveCriticalInBaseline(t *testing.T) {
 	cfg := config.Default()
 	cfg.Policy.StopOnWatermarkBreach = true

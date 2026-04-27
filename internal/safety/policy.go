@@ -82,7 +82,12 @@ func (s Layer) ValidateApply(snapshot model.ClusterSnapshot, plan model.Rebalanc
 
 func (s Layer) ShouldStopDetailed(snapshot model.ClusterSnapshot, baseline model.ClusterSnapshot) StopDecision {
 	if s.cfg.Policy.StopOnHealthDegrade {
-		if healthSeverity(snapshot.Health.Status) > healthSeverity(baseline.Health.Status) {
+		// If yellow is allowed for apply, don't stop on green->yellow degrade.
+		if s.cfg.Policy.AllowYellow &&
+			strings.EqualFold(baseline.Health.Status, "green") &&
+			strings.EqualFold(snapshot.Health.Status, "yellow") {
+			// continue checks below
+		} else if healthSeverity(snapshot.Health.Status) > healthSeverity(baseline.Health.Status) {
 			return StopDecision{Stop: true, Code: ReasonHealthDegraded, Message: fmt.Sprintf("health degraded from %s to %s", baseline.Health.Status, snapshot.Health.Status)}
 		}
 	}

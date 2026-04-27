@@ -26,38 +26,51 @@ func (p Planner) Build(snapshot model.ClusterSnapshot, analysis model.AnalysisRe
 		return model.RebalancePlan{}, fmt.Errorf("planner blocked: active operations %d exceed max %d", snapshot.ActiveOperations, p.cfg.Cluster.MaxActiveRecover)
 	}
 
-	before := analysis.Score
+	before := computeScore(snapshot)
 	work := model.CloneSnapshot(snapshot)
 	maxMoves := p.cfg.Planner.MaxMovesPerPlan
 	steps := make([]model.PlanStep, 0, maxMoves)
+	blockedSources := map[string]bool{}
 
 	for i := 0; i < maxMoves; i++ {
-		fromID, toID, ok := p.pickMostImbalancedNodes(work)
-		if !ok {
+		sources := p.pickSourceNodes(work)
+		moved := false
+		for _, fromID := range sources {
+			if blockedSources[fromID] {
+				continue
+			}
+			targets := p.pickTargetNodes(work, fromID)
+			for _, toID := range targets {
+				candidate, ok := p.pickShardToMove(work, fromID, toID)
+				if !ok {
+					continue
+				}
+				fromNode := work.Nodes[fromID]
+				toNode := work.Nodes[toID]
+				if !p.allowedTarget(work, candidate, toNode) {
+					continue
+				}
+				step := p.makeStep(candidate, fromNode, toNode)
+				candidateWork := model.CloneSnapshot(work)
+				applyMove(&candidateWork, step)
+				after := computeScore(candidateWork)
+				if improvement(before, after) <= 0 {
+					continue
+				}
+				steps = append(steps, step)
+				work = candidateWork
+				before = after
+				moved = true
+				break
+			}
+			if moved {
+				break
+			}
+			blockedSources[fromID] = true
+		}
+		if !moved {
 			break
 		}
-		candidate, ok := p.pickShardToMove(work, fromID, toID)
-		if !ok {
-			break
-		}
-		fromNode := work.Nodes[fromID]
-		toNode := work.Nodes[toID]
-		if !p.allowedTarget(work, candidate, toNode) {
-			markNodeAsUnmovable(&work, fromID)
-			continue
-		}
-		step := p.makeStep(candidate, fromNode, toNode)
-		candidateWork := model.CloneSnapshot(work)
-		applyMove(&candidateWork, step)
-		after := computeScore(candidateWork)
-		if improvement(before, after) <= 0 {
-			// Don't stop planning on one bad candidate; keep searching in other nodes.
-			markNodeAsUnmovable(&work, fromID)
-			continue
-		}
-		steps = append(steps, step)
-		work = candidateWork
-		before = after
 	}
 
 	return model.RebalancePlan{
@@ -166,9 +179,9 @@ func (p Planner) allowedTarget(snapshot model.ClusterSnapshot, shard model.Shard
 	return true
 }
 
-func (p Planner) pickMostImbalancedNodes(snapshot model.ClusterSnapshot) (string, string, bool) {
+func (p Planner) pickSourceNodes(snapshot model.ClusterSnapshot) []string {
 	if len(snapshot.Nodes) < 2 {
-		return "", "", false
+		return nil
 	}
 	type pair struct {
 		id       string
@@ -208,16 +221,71 @@ func (p Planner) pickMostImbalancedNodes(snapshot model.ClusterSnapshot) (string
 		return p.cfg.Planner.NodeBalanceWeightDisk*diskNorm + p.cfg.Planner.NodeBalanceWeightShards*shardNorm
 	}
 	sort.Slice(arr, func(i, j int) bool { return score(arr[i]) > score(arr[j]) })
-	from := arr[0]
+	if len(arr) < 2 {
+		return nil
+	}
+	max := arr[0]
+	min := arr[len(arr)-1]
+	if max.diskUsed-min.diskUsed < 1 && max.shards-min.shards <= 1 {
+		return nil
+	}
+	ids := make([]string, 0, len(arr))
+	for _, p := range arr {
+		ids = append(ids, p.id)
+	}
+	return ids
+}
+
+func (p Planner) pickTargetNodes(snapshot model.ClusterSnapshot, sourceID string) []string {
+	type pair struct {
+		id       string
+		diskUsed float64
+		shards   int
+	}
+	counts := map[string]int{}
+	for id := range snapshot.Nodes {
+		counts[id] = 0
+	}
+	for _, s := range snapshot.Shards {
+		counts[s.NodeID]++
+	}
+	arr := make([]pair, 0, len(snapshot.Nodes))
+	for id, n := range snapshot.Nodes {
+		if id == sourceID {
+			continue
+		}
+		arr = append(arr, pair{id: id, diskUsed: n.DiskUsedPercent(), shards: counts[id]})
+	}
+	if len(arr) == 0 {
+		return nil
+	}
+	maxDisk := 0.0
+	maxShards := 0
+	for _, p := range arr {
+		if p.diskUsed > maxDisk {
+			maxDisk = p.diskUsed
+		}
+		if p.shards > maxShards {
+			maxShards = p.shards
+		}
+	}
+	score := func(pn pair) float64 {
+		diskNorm := 0.0
+		if maxDisk > 0 {
+			diskNorm = pn.diskUsed / maxDisk
+		}
+		shardNorm := 0.0
+		if maxShards > 0 {
+			shardNorm = float64(pn.shards) / float64(maxShards)
+		}
+		return p.cfg.Planner.NodeBalanceWeightDisk*diskNorm + p.cfg.Planner.NodeBalanceWeightShards*shardNorm
+	}
 	sort.Slice(arr, func(i, j int) bool { return score(arr[i]) < score(arr[j]) })
-	to := arr[0]
-	if from.diskUsed-to.diskUsed < 1 && from.shards-to.shards <= 1 {
-		return "", "", false
+	ids := make([]string, 0, len(arr))
+	for _, p := range arr {
+		ids = append(ids, p.id)
 	}
-	if from.id == to.id {
-		return "", "", false
-	}
-	return from.id, to.id, true
+	return ids
 }
 
 func (p Planner) pickShardToMove(snapshot model.ClusterSnapshot, fromNodeID, toNodeID string) (model.Shard, bool) {
@@ -244,6 +312,9 @@ func (p Planner) pickShardToMove(snapshot model.ClusterSnapshot, fromNodeID, toN
 	found := false
 	for _, c := range candidates {
 		if c.State != "STARTED" && c.State != "RELOCATING" {
+			continue
+		}
+		if c.SizeGB < p.cfg.Planner.MinMoveShardSizeGB {
 			continue
 		}
 		alreadyOnTarget := false

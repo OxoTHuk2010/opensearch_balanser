@@ -46,6 +46,7 @@ type PlannerConfig struct {
 	MoveScoreWeightSize                float64 `yaml:"move_score_weight_size"`
 	MoveScorePrimaryPenalty            float64 `yaml:"move_score_primary_penalty"`
 	MoveScoreSevereLargeShardExtraMult float64 `yaml:"move_score_severe_large_shard_extra_mult"`
+	MinMoveShardSizeGB                 float64 `yaml:"min_move_shard_size_gb"`
 }
 
 type LimitsConfig struct {
@@ -107,6 +108,7 @@ func Default() Config {
 			MoveScoreWeightSize:                0.5,
 			MoveScorePrimaryPenalty:            1000,
 			MoveScoreSevereLargeShardExtraMult: 4.0,
+			MinMoveShardSizeGB:                 0.01,
 		},
 		Limits: LimitsConfig{
 			MaxConcurrentMoves: 2,
@@ -195,6 +197,9 @@ func Load(path string) (Config, error) {
 	}
 	if cfg.Planner.MoveScoreSevereLargeShardExtraMult <= 0 {
 		cfg.Planner.MoveScoreSevereLargeShardExtraMult = 4.0
+	}
+	if cfg.Planner.MinMoveShardSizeGB < 0 {
+		cfg.Planner.MinMoveShardSizeGB = 0.01
 	}
 	if cfg.Limits.MaxConcurrentMoves <= 0 {
 		cfg.Limits.MaxConcurrentMoves = 1

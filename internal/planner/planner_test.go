@@ -88,3 +88,33 @@ func TestBuildPrefersSmallShardMovesUnderSevereShardImbalance(t *testing.T) {
 		t.Fatalf("expected small-shard move, got %.2f GB", pl.Steps[0].EstimatedCost.NetworkGB)
 	}
 }
+
+func TestBuildSkipsTinyShards(t *testing.T) {
+	cfg := config.Default()
+	cfg.Planner.MaxMovesPerPlan = 5
+	cfg.Planner.MinMoveShardSizeGB = 0.01
+	p := New(cfg)
+	snap := model.ClusterSnapshot{
+		ID:     "s3",
+		Health: model.ClusterHealth{Status: "green"},
+		Nodes: map[string]model.Node{
+			"a": {ID: "a", Zone: "z1", DiskTotalGB: 100, DiskUsedGB: 80},
+			"b": {ID: "b", Zone: "z2", DiskTotalGB: 100, DiskUsedGB: 40},
+		},
+		Shards: []model.Shard{
+			{Index: "tiny", ShardID: 0, Primary: false, NodeID: "a", SizeGB: 0.00001, State: "STARTED"},
+			{Index: "normal", ShardID: 1, Primary: false, NodeID: "a", SizeGB: 1, State: "STARTED"},
+		},
+		Watermarks: model.Watermarks{HighPercent: 95},
+	}
+	pl, err := p.Build(snap, model.AnalysisResult{Score: model.Score{DiskSkewPct: 100, ShardSkewPct: 100}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(pl.Steps) == 0 {
+		t.Fatalf("expected non-empty plan")
+	}
+	if pl.Steps[0].Index == "tiny" {
+		t.Fatalf("expected tiny shard to be skipped")
+	}
+}
