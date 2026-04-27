@@ -185,17 +185,22 @@ func (s ClusterSnapshot) ComputeID() (string, error) {
 		Status      string   `json:"status"`
 		Roles       []string `json:"roles"`
 		DiskTotalGB float64  `json:"disk_total_gb"`
-		DiskUsedGB  float64  `json:"disk_used_gb"`
+	}
+	type stableShard struct {
+		Index   string `json:"index"`
+		ShardID int    `json:"shard_id"`
+		Primary bool   `json:"primary"`
+		NodeID  string `json:"node_id"`
 	}
 	stable := struct {
 		Health     ClusterHealth `json:"health"`
 		Watermarks Watermarks    `json:"watermarks"`
 		Nodes      []stableNode  `json:"nodes"`
-		Shards     []Shard       `json:"shards"`
+		Shards     []stableShard `json:"shards"`
 	}{
 		Health:     s.Health,
 		Watermarks: s.Watermarks,
-		Shards:     append([]Shard(nil), s.Shards...),
+		Shards:     make([]stableShard, 0, len(s.Shards)),
 	}
 
 	for _, n := range s.Nodes {
@@ -210,7 +215,14 @@ func (s ClusterSnapshot) ComputeID() (string, error) {
 			Status:      n.Status,
 			Roles:       roles,
 			DiskTotalGB: n.DiskTotalGB,
-			DiskUsedGB:  n.DiskUsedGB,
+		})
+	}
+	for _, sh := range s.Shards {
+		stable.Shards = append(stable.Shards, stableShard{
+			Index:   sh.Index,
+			ShardID: sh.ShardID,
+			Primary: sh.Primary,
+			NodeID:  sh.NodeID,
 		})
 	}
 
