@@ -45,7 +45,6 @@ func Run(ctx context.Context, cfg config.Config, adapter collector.Adapter, poli
 func RunWithOptions(ctx context.Context, cfg config.Config, adapter collector.Adapter, policy safety.Layer, baseline model.ClusterSnapshot, plan model.RebalancePlan, opts RunOptions) (Result, error) {
 	batches := buildBatches(plan.Steps, cfg.Limits.MaxConcurrentMoves, cfg.Limits.MaxDataGBPerBatch)
 	result := Result{}
-	baselineHealth := baseline.Health.Status
 
 	for i, batch := range batches {
 		if opts.StopRequested != nil && opts.StopRequested() {
@@ -93,7 +92,7 @@ func RunWithOptions(ctx context.Context, cfg config.Config, adapter collector.Ad
 			emit(opts, Event{Type: "stopped", Batch: i + 1, Total: len(batches), ReasonCode: result.StopReasonCode, Message: result.StopReason})
 			return result, nil
 		}
-		stop := policy.ShouldStopDetailed(snap, baselineHealth)
+		stop := policy.ShouldStopDetailed(snap, baseline)
 		if stop.Stop {
 			result.Stopped = true
 			result.StopReason = stop.Message

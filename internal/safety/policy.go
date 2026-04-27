@@ -80,15 +80,15 @@ func (s Layer) ValidateApply(snapshot model.ClusterSnapshot, plan model.Rebalanc
 	return nil
 }
 
-func (s Layer) ShouldStopDetailed(snapshot model.ClusterSnapshot, baselineHealth string) StopDecision {
+func (s Layer) ShouldStopDetailed(snapshot model.ClusterSnapshot, baseline model.ClusterSnapshot) StopDecision {
 	if s.cfg.Policy.StopOnHealthDegrade {
-		if healthSeverity(snapshot.Health.Status) > healthSeverity(baselineHealth) {
-			return StopDecision{Stop: true, Code: ReasonHealthDegraded, Message: fmt.Sprintf("health degraded from %s to %s", baselineHealth, snapshot.Health.Status)}
+		if healthSeverity(snapshot.Health.Status) > healthSeverity(baseline.Health.Status) {
+			return StopDecision{Stop: true, Code: ReasonHealthDegraded, Message: fmt.Sprintf("health degraded from %s to %s", baseline.Health.Status, snapshot.Health.Status)}
 		}
 	}
 	if s.cfg.Policy.StopOnWatermarkBreach {
 		for _, n := range snapshot.Nodes {
-			if n.DiskUsedPercent() >= s.cfg.Policy.CriticalDiskPercent {
+			if n.DiskUsedPercent() >= s.cfg.Policy.CriticalDiskPercent && crossedCriticalDisk(n, baseline.Nodes[n.ID], s.cfg.Policy.CriticalDiskPercent) {
 				return StopDecision{Stop: true, Code: ReasonCriticalDiskExceeded, Message: fmt.Sprintf("node %s crossed critical disk threshold %.2f%%", n.ID, s.cfg.Policy.CriticalDiskPercent)}
 			}
 		}
@@ -99,8 +99,16 @@ func (s Layer) ShouldStopDetailed(snapshot model.ClusterSnapshot, baselineHealth
 	return StopDecision{Stop: false, Code: ReasonOK, Message: "cluster state is acceptable"}
 }
 
-func (s Layer) ShouldStop(snapshot model.ClusterSnapshot, baselineHealth string) (bool, string) {
-	d := s.ShouldStopDetailed(snapshot, baselineHealth)
+func crossedCriticalDisk(current model.Node, baseline model.Node, threshold float64) bool {
+	// Missing baseline node entry is treated as crossing to fail safe.
+	if baseline.ID == "" {
+		return true
+	}
+	return baseline.DiskUsedPercent() < threshold && current.DiskUsedPercent() >= threshold
+}
+
+func (s Layer) ShouldStop(snapshot model.ClusterSnapshot, baseline model.ClusterSnapshot) (bool, string) {
+	d := s.ShouldStopDetailed(snapshot, baseline)
 	return d.Stop, d.Message
 }
 
