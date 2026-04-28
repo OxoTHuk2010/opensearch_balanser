@@ -88,3 +88,30 @@ func TestValidateMoveFallbackWithoutExplain(t *testing.T) {
 		t.Fatalf("expected fallback request without explain=true, got %s", requests[1])
 	}
 }
+
+func TestParseNodeFSStats(t *testing.T) {
+	payload := []byte(`{
+		"nodes": {
+			"id1": {
+				"name": "node-a",
+				"fs": {
+					"total": {
+						"total_in_bytes": 214748364800,
+						"available_in_bytes": 53687091200
+					}
+				}
+			}
+		}
+	}`)
+	got := parseNodeFSStats(payload)
+	st, ok := got["node-a"]
+	if !ok {
+		t.Fatalf("expected node-a in parsed stats")
+	}
+	if abs(st.TotalGB-200) > 0.0001 {
+		t.Fatalf("expected total 200GB, got %.6f", st.TotalGB)
+	}
+	if abs(st.UsedGB-150) > 0.0001 {
+		t.Fatalf("expected used 150GB, got %.6f", st.UsedGB)
+	}
+}

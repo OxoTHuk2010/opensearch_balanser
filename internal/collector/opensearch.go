@@ -88,6 +88,11 @@ func (a *OpenSearchAdapter) CollectSnapshot(ctx context.Context) (model.ClusterS
 	if err := json.Unmarshal(topoResp, &topo); err != nil {
 		return model.ClusterSnapshot{}, fmt.Errorf("parse nodes topology: %w", err)
 	}
+	nodeStatsByName := map[string]nodeFSStats{}
+	fsResp, err := a.get(ctx, "/_nodes/stats/fs?filter_path=nodes.*.name,nodes.*.fs.total.total_in_bytes,nodes.*.fs.total.available_in_bytes")
+	if err == nil {
+		nodeStatsByName = parseNodeFSStats(fsResp)
+	}
 
 	// Keep native units for shard store to avoid rounding tiny shards to 0 when bytes=gb.
 	shardsResp, err := a.get(ctx, "/_cat/shards?format=json&h=index,shard,prirep,state,node,store")
@@ -132,6 +137,10 @@ func (a *OpenSearchAdapter) CollectSnapshot(ctx context.Context) (model.ClusterS
 			Roles:       roles,
 			DiskTotalGB: total,
 			DiskUsedGB:  used,
+		}
+		if st, ok := nodeStatsByName[name]; ok && st.TotalGB > 0 {
+			node.DiskTotalGB = st.TotalGB
+			node.DiskUsedGB = st.UsedGB
 		}
 		for _, meta := range topo.Nodes {
 			if meta.Name != name {
@@ -384,4 +393,40 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+type nodeFSStats struct {
+	TotalGB float64
+	UsedGB  float64
+}
+
+func parseNodeFSStats(payload []byte) map[string]nodeFSStats {
+	out := map[string]nodeFSStats{}
+	var raw struct {
+		Nodes map[string]struct {
+			Name string `json:"name"`
+			FS   struct {
+				Total struct {
+					TotalInBytes     float64 `json:"total_in_bytes"`
+					AvailableInBytes float64 `json:"available_in_bytes"`
+				} `json:"total"`
+			} `json:"fs"`
+		} `json:"nodes"`
+	}
+	if err := json.Unmarshal(payload, &raw); err != nil {
+		return out
+	}
+	for _, n := range raw.Nodes {
+		if n.Name == "" || n.FS.Total.TotalInBytes <= 0 {
+			continue
+		}
+		totalGB := n.FS.Total.TotalInBytes / (1024 * 1024 * 1024)
+		availGB := n.FS.Total.AvailableInBytes / (1024 * 1024 * 1024)
+		usedGB := totalGB - availGB
+		if usedGB < 0 {
+			usedGB = 0
+		}
+		out[n.Name] = nodeFSStats{TotalGB: totalGB, UsedGB: usedGB}
+	}
+	return out
 }
