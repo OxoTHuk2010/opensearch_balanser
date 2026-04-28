@@ -27,6 +27,7 @@ func (p Planner) Build(snapshot model.ClusterSnapshot, analysis model.AnalysisRe
 	}
 
 	before := computeScore(snapshot)
+	beforePressure := p.totalFreeDeficitGB(snapshot)
 	work := model.CloneSnapshot(snapshot)
 	maxMoves := p.cfg.Planner.MaxMovesPerPlan
 	steps := make([]model.PlanStep, 0, maxMoves)
@@ -54,12 +55,14 @@ func (p Planner) Build(snapshot model.ClusterSnapshot, analysis model.AnalysisRe
 				candidateWork := model.CloneSnapshot(work)
 				applyMove(&candidateWork, step)
 				after := computeScore(candidateWork)
-				if improvement(before, after) <= 0 {
+				afterPressure := p.totalFreeDeficitGB(candidateWork)
+				if p.improvement(before, after, beforePressure, afterPressure) <= 0 {
 					continue
 				}
 				steps = append(steps, step)
 				work = candidateWork
 				before = after
+				beforePressure = afterPressure
 				moved = true
 				break
 			}
@@ -477,4 +480,29 @@ func sameFaultDomain(a, b model.Node) bool {
 
 func improvement(before, after model.Score) float64 {
 	return (before.DiskSkewPct + before.ShardSkewPct + before.RiskPenalty) - (after.DiskSkewPct + after.ShardSkewPct + after.RiskPenalty)
+}
+
+func (p Planner) totalFreeDeficitGB(snapshot model.ClusterSnapshot) float64 {
+	if p.cfg.Planner.TargetFreeGBPerNode <= 0 {
+		return 0
+	}
+	total := 0.0
+	for _, n := range snapshot.Nodes {
+		free := n.DiskTotalGB - n.DiskUsedGB
+		deficit := p.cfg.Planner.TargetFreeGBPerNode - free
+		if deficit > 0 {
+			total += deficit
+		}
+	}
+	return total
+}
+
+func (p Planner) improvement(before, after model.Score, beforePressure, afterPressure float64) float64 {
+	base := improvement(before, after)
+	if p.cfg.Planner.TargetFreeGBPerNode <= 0 {
+		return base
+	}
+	pressureGain := beforePressure - afterPressure
+	// Use pressure weight to keep planner moving while target-free deficit is being reduced.
+	return base + pressureGain*p.cfg.Planner.NodeBalanceWeightPressure
 }

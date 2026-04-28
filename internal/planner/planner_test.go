@@ -184,3 +184,35 @@ func TestBuildPrefersLargerMoveWhenSourceUnderTargetFreePressure(t *testing.T) {
 		t.Fatalf("expected pressure-aware larger move, got %+v", pl.Steps[0])
 	}
 }
+
+func TestBuildContinuesWhileReducingFreeSpaceDeficit(t *testing.T) {
+	cfg := config.Default()
+	cfg.Planner.MaxMovesPerPlan = 3
+	cfg.Planner.TargetFreeGBPerNode = 50
+	cfg.Planner.NodeBalanceWeightPressure = 3
+	cfg.Planner.PressureMinShardSizeGB = 0.1
+	p := New(cfg)
+
+	snap := model.ClusterSnapshot{
+		ID:     "s6",
+		Health: model.ClusterHealth{Status: "green"},
+		Nodes: map[string]model.Node{
+			"a": {ID: "a", Zone: "z1", DiskTotalGB: 100, DiskUsedGB: 95}, // free=5
+			"b": {ID: "b", Zone: "z2", DiskTotalGB: 100, DiskUsedGB: 20},
+		},
+		Shards: []model.Shard{
+			{Index: "x", ShardID: 0, Primary: false, NodeID: "a", SizeGB: 5, State: "STARTED"},
+			{Index: "x", ShardID: 1, Primary: false, NodeID: "a", SizeGB: 5, State: "STARTED"},
+			{Index: "x", ShardID: 2, Primary: false, NodeID: "a", SizeGB: 5, State: "STARTED"},
+		},
+		Watermarks: model.Watermarks{LowPercent: 95, HighPercent: 97},
+	}
+
+	pl, err := p.Build(snap, model.AnalysisResult{Score: model.Score{DiskSkewPct: 100, ShardSkewPct: 100}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(pl.Steps) < 2 {
+		t.Fatalf("expected planner to continue reducing free-space deficit, got %d steps", len(pl.Steps))
+	}
+}
