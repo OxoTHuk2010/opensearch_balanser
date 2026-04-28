@@ -50,8 +50,11 @@ Safety-first rebalancer for distributed OpenSearch clusters with CLI + HTTP API.
 - `balancer plan --config config.yaml --out plan-bundle.json`
 - `balancer dry-run --config config.yaml --plan plan-bundle.json --out plan-bundle.json`
 - `balancer apply --config config.yaml --plan plan-bundle.json`
+- `balancer force --config config.yaml --out plan-bundle.json`
 - `balancer emergency-drain --config config.yaml --node data-01 --out emergency-plan-bundle.json`
 - `balancer serve-api --config config.yaml`
+
+`force` runs `plan -> dry-run -> apply` in one command without interactive batch confirmations, intended for cron/automation.
 
 ## API Enablement
 

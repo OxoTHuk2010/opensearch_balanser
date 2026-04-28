@@ -32,6 +32,8 @@ func main() {
 		runDryRun(os.Args[2:])
 	case "apply":
 		runApply(os.Args[2:])
+	case "force":
+		runForce(os.Args[2:])
 	case "emergency-drain":
 		runEmergencyDrain(os.Args[2:])
 	case "serve-api":
@@ -124,6 +126,39 @@ func runApply(args []string) {
 	printJSON(result)
 }
 
+func runForce(args []string) {
+	fs := flag.NewFlagSet("force", flag.ExitOnError)
+	cfgPath := fs.String("config", "config.yaml", "Path to YAML config")
+	out := fs.String("out", "plan-bundle.json", "Output plan bundle JSON (plan+dry-run)")
+	if err := fs.Parse(args); err != nil {
+		fatal(err)
+	}
+	svc := mustService(*cfgPath)
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Minute)
+	defer cancel()
+
+	bundle, err := svc.Plan(ctx)
+	if err != nil {
+		fatal(err)
+	}
+	bundle, err = svc.DryRun(ctx, bundle)
+	if err != nil {
+		fatal(err)
+	}
+	if err := app.SaveBundle(*out, bundle); err != nil {
+		fatal(err)
+	}
+	result, err := svc.ApplyForce(ctx, bundle)
+	if err != nil {
+		fatal(err)
+	}
+	printJSON(map[string]any{
+		"mode":       "force",
+		"bundle_out": *out,
+		"result":     result,
+	})
+}
+
 func runEmergencyDrain(args []string) {
 	fs := flag.NewFlagSet("emergency-drain", flag.ExitOnError)
 	cfgPath := fs.String("config", "config.yaml", "Path to YAML config")
@@ -203,7 +238,7 @@ func mustBootstrap(cfgPath string) (config.Config, app.Service, app.Runtime) {
 
 func usage() {
 	fmt.Println("Usage: balancer <command> [flags]")
-	fmt.Println("Commands: audit, plan, dry-run, apply, emergency-drain, serve-api")
+	fmt.Println("Commands: audit, plan, dry-run, apply, force, emergency-drain, serve-api")
 }
 
 func printJSON(v any) {

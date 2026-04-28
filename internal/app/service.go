@@ -108,6 +108,14 @@ func (s Service) DryRun(ctx context.Context, bundle model.PlanBundle) (model.Pla
 }
 
 func (s Service) Apply(ctx context.Context, bundle model.PlanBundle) (executor.Result, error) {
+	return s.apply(ctx, bundle, false)
+}
+
+func (s Service) ApplyForce(ctx context.Context, bundle model.PlanBundle) (executor.Result, error) {
+	return s.apply(ctx, bundle, true)
+}
+
+func (s Service) apply(ctx context.Context, bundle model.PlanBundle, force bool) (executor.Result, error) {
 	fresh, err := s.adapter.CollectSnapshot(ctx)
 	if err != nil {
 		return executor.Result{}, err
@@ -119,10 +127,14 @@ func (s Service) Apply(ctx context.Context, bundle model.PlanBundle) (executor.R
 
 	execID := NewID("exec")
 	corrID := NewID("corr")
+	mode := "apply-cli"
+	if force {
+		mode = "apply-force"
+	}
 	exec := model.Execution{
 		ID:            execID,
 		CorrelationID: corrID,
-		Mode:          "apply-cli",
+		Mode:          mode,
 		Status:        model.ExecutionRunning,
 		CreatedAt:     time.Now().UTC(),
 		UpdatedAt:     time.Now().UTC(),
@@ -140,6 +152,7 @@ func (s Service) Apply(ctx context.Context, bundle model.PlanBundle) (executor.R
 		"correlation_id":   corrID,
 		"total_steps":      len(bundle.Plan.Steps),
 		"plan_snapshot_id": bundle.Plan.SnapshotID,
+		"force":            force,
 	})
 
 	confirm := func(batch int, total int, steps []model.PlanStep) (bool, error) {
@@ -173,7 +186,7 @@ func (s Service) Apply(ctx context.Context, bundle model.PlanBundle) (executor.R
 		v := strings.TrimSpace(strings.ToLower(line))
 		return v == "y" || v == "yes", nil
 	}
-	if !s.cfg.Runtime.RequireManualApproval {
+	if force || !s.cfg.Runtime.RequireManualApproval {
 		confirm = nil
 	}
 	hooks := executor.RunOptions{
