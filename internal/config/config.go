@@ -51,6 +51,7 @@ type PlannerConfig struct {
 	NodeBalanceWeightPressure          float64 `yaml:"node_balance_weight_pressure"`
 	PressureMinShardSizeGB             float64 `yaml:"pressure_min_shard_size_gb"`
 	MoveScorePressureSizeReward        float64 `yaml:"move_score_pressure_size_reward"`
+	LowWatermarkSafetyMarginPercent    float64 `yaml:"low_watermark_safety_margin_percent"`
 }
 
 type LimitsConfig struct {
@@ -117,6 +118,7 @@ func Default() Config {
 			NodeBalanceWeightPressure:          1.2,
 			PressureMinShardSizeGB:             0.5,
 			MoveScorePressureSizeReward:        4.0,
+			LowWatermarkSafetyMarginPercent:    0.5,
 		},
 		Limits: LimitsConfig{
 			MaxConcurrentMoves: 2,
@@ -220,6 +222,9 @@ func Load(path string) (Config, error) {
 	}
 	if cfg.Planner.MoveScorePressureSizeReward < 0 {
 		cfg.Planner.MoveScorePressureSizeReward = 4.0
+	}
+	if cfg.Planner.LowWatermarkSafetyMarginPercent < 0 {
+		cfg.Planner.LowWatermarkSafetyMarginPercent = 0.5
 	}
 	if cfg.Limits.MaxConcurrentMoves <= 0 {
 		cfg.Limits.MaxConcurrentMoves = 1

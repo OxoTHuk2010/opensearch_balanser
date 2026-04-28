@@ -30,6 +30,7 @@ planner:
   node_balance_weight_pressure: 1.2
   pressure_min_shard_size_gb: 0.5
   move_score_pressure_size_reward: 4.0
+  low_watermark_safety_margin_percent: 0.5
 
 limits:
   max_concurrent_moves: 2

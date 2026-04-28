@@ -216,3 +216,32 @@ func TestBuildContinuesWhileReducingFreeSpaceDeficit(t *testing.T) {
 		t.Fatalf("expected planner to continue reducing free-space deficit, got %d steps", len(pl.Steps))
 	}
 }
+
+func TestBuildRespectsLowWatermarkSafetyMargin(t *testing.T) {
+	cfg := config.Default()
+	cfg.Planner.MaxMovesPerPlan = 1
+	cfg.Planner.LowWatermarkSafetyMarginPercent = 0.5
+	p := New(cfg)
+	snap := model.ClusterSnapshot{
+		ID:     "s7",
+		Health: model.ClusterHealth{Status: "green"},
+		Nodes: map[string]model.Node{
+			"a": {ID: "a", Zone: "z1", DiskTotalGB: 100, DiskUsedGB: 90},
+			"b": {ID: "b", Zone: "z2", DiskTotalGB: 100, DiskUsedGB: 84.7}, // close to low=85
+			"c": {ID: "c", Zone: "z3", DiskTotalGB: 100, DiskUsedGB: 40},
+		},
+		Shards: []model.Shard{
+			{Index: "i", ShardID: 0, Primary: false, NodeID: "a", SizeGB: 0.6, State: "STARTED"},
+		},
+		Watermarks: model.Watermarks{LowPercent: 85, HighPercent: 90},
+	}
+	pl, err := p.Build(snap, model.AnalysisResult{Score: model.Score{DiskSkewPct: 100, ShardSkewPct: 100}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, st := range pl.Steps {
+		if st.ToNode == "b" {
+			t.Fatalf("expected safety margin to avoid node b as target")
+		}
+	}
+}

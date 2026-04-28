@@ -32,6 +32,7 @@ func (p Planner) Build(snapshot model.ClusterSnapshot, analysis model.AnalysisRe
 	maxMoves := p.cfg.Planner.MaxMovesPerPlan
 	steps := make([]model.PlanStep, 0, maxMoves)
 	blockedSources := map[string]bool{}
+	movedReplicas := map[string]bool{}
 
 	for i := 0; i < maxMoves; i++ {
 		sources := p.pickSourceNodes(work)
@@ -44,6 +45,10 @@ func (p Planner) Build(snapshot model.ClusterSnapshot, analysis model.AnalysisRe
 			for _, toID := range targets {
 				candidate, ok := p.pickShardToMove(work, fromID, toID)
 				if !ok {
+					continue
+				}
+				key := shardMoveKey(candidate)
+				if movedReplicas[key] {
 					continue
 				}
 				fromNode := work.Nodes[fromID]
@@ -60,6 +65,7 @@ func (p Planner) Build(snapshot model.ClusterSnapshot, analysis model.AnalysisRe
 					continue
 				}
 				steps = append(steps, step)
+				movedReplicas[key] = true
 				work = candidateWork
 				before = after
 				beforePressure = afterPressure
@@ -173,6 +179,10 @@ func (p Planner) allowedTarget(snapshot model.ClusterSnapshot, shard model.Shard
 	}
 	if threshold <= 0 {
 		threshold = 85
+	}
+	threshold -= p.cfg.Planner.LowWatermarkSafetyMarginPercent
+	if threshold < 0 {
+		threshold = 0
 	}
 	after := estimateDiskPct(target, shard.SizeGB)
 	// Allocator may reject incoming allocation when target is above low watermark.
@@ -505,4 +515,8 @@ func (p Planner) improvement(before, after model.Score, beforePressure, afterPre
 	pressureGain := beforePressure - afterPressure
 	// Use pressure weight to keep planner moving while target-free deficit is being reduced.
 	return base + pressureGain*p.cfg.Planner.NodeBalanceWeightPressure
+}
+
+func shardMoveKey(s model.Shard) string {
+	return fmt.Sprintf("%s/%d/%t", s.Index, s.ShardID, s.Primary)
 }
