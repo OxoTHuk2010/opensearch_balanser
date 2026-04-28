@@ -150,7 +150,7 @@ func (p Planner) makeStep(shard model.Shard, fromNode, toNode model.Node) model.
 		ToNode:   toNode.ID,
 		Reason:   "reduce disk/shard skew while preserving placement constraints",
 		ConstraintChecks: []string{
-			"target node below high watermark",
+			"target node below low watermark (with safety margin)",
 			"fault-domain separation is preserved",
 			"cluster health preconditions satisfied",
 		},
