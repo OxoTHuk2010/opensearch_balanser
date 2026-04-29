@@ -214,7 +214,8 @@ func (p Planner) allowedTarget(snapshot model.ClusterSnapshot, shard model.Shard
 }
 
 func (p Planner) pickSourceNodes(snapshot model.ClusterSnapshot) []string {
-	if len(snapshot.Nodes) < 2 {
+	eligible := eligibleDataNodes(snapshot.Nodes)
+	if len(eligible) < 2 {
 		return nil
 	}
 	type pair struct {
@@ -223,14 +224,16 @@ func (p Planner) pickSourceNodes(snapshot model.ClusterSnapshot) []string {
 		shards   int
 	}
 	counts := map[string]int{}
-	for id := range snapshot.Nodes {
+	for id := range eligible {
 		counts[id] = 0
 	}
 	for _, s := range snapshot.Shards {
-		counts[s.NodeID]++
+		if _, ok := counts[s.NodeID]; ok {
+			counts[s.NodeID]++
+		}
 	}
-	arr := make([]pair, 0, len(snapshot.Nodes))
-	for id, n := range snapshot.Nodes {
+	arr := make([]pair, 0, len(eligible))
+	for id, n := range eligible {
 		arr = append(arr, pair{id: id, diskUsed: n.DiskUsedPercent(), shards: counts[id]})
 	}
 	maxDisk := 0.0
@@ -287,14 +290,17 @@ func (p Planner) pickTargetNodes(snapshot model.ClusterSnapshot, sourceID string
 		shards   int
 	}
 	counts := map[string]int{}
-	for id := range snapshot.Nodes {
+	eligible := eligibleDataNodes(snapshot.Nodes)
+	for id := range eligible {
 		counts[id] = 0
 	}
 	for _, s := range snapshot.Shards {
-		counts[s.NodeID]++
+		if _, ok := counts[s.NodeID]; ok {
+			counts[s.NodeID]++
+		}
 	}
-	arr := make([]pair, 0, len(snapshot.Nodes))
-	for id, n := range snapshot.Nodes {
+	arr := make([]pair, 0, len(eligible))
+	for id, n := range eligible {
 		if id == sourceID {
 			continue
 		}
@@ -438,19 +444,22 @@ func applyMove(snapshot *model.ClusterSnapshot, step model.PlanStep) {
 }
 
 func computeScore(snapshot model.ClusterSnapshot) model.Score {
-	if len(snapshot.Nodes) == 0 {
+	eligible := eligibleDataNodes(snapshot.Nodes)
+	if len(eligible) == 0 {
 		return model.Score{}
 	}
 	diskMin, diskMax := math.MaxFloat64, -math.MaxFloat64
 	counts := map[string]float64{}
-	for id := range snapshot.Nodes {
+	for id := range eligible {
 		counts[id] = 0
 	}
 	for _, s := range snapshot.Shards {
-		counts[s.NodeID]++
+		if _, ok := counts[s.NodeID]; ok {
+			counts[s.NodeID]++
+		}
 	}
 	shardMin, shardMax := math.MaxFloat64, -math.MaxFloat64
-	for id, n := range snapshot.Nodes {
+	for id, n := range eligible {
 		dp := n.DiskUsedPercent()
 		diskMin = math.Min(diskMin, dp)
 		diskMax = math.Max(diskMax, dp)
@@ -513,7 +522,7 @@ func (p Planner) totalFreeDeficitGB(snapshot model.ClusterSnapshot) float64 {
 		return 0
 	}
 	total := 0.0
-	for _, n := range snapshot.Nodes {
+	for _, n := range eligibleDataNodes(snapshot.Nodes) {
 		free := n.DiskTotalGB - n.DiskUsedGB
 		deficit := p.cfg.Planner.TargetFreeGBPerNode - free
 		if deficit > 0 {
@@ -529,6 +538,9 @@ func (p Planner) sourcePressureDeficitGB(snapshot model.ClusterSnapshot, nodeID 
 	}
 	n, ok := snapshot.Nodes[nodeID]
 	if !ok {
+		return 0
+	}
+	if !nodeCanHoldData(n) {
 		return 0
 	}
 	free := n.DiskTotalGB - n.DiskUsedGB
@@ -551,4 +563,23 @@ func (p Planner) improvement(before, after model.Score, beforePressure, afterPre
 
 func shardMoveKey(s model.Shard) string {
 	return fmt.Sprintf("%s/%d/%t", s.Index, s.ShardID, s.Primary)
+}
+
+func eligibleDataNodes(nodes map[string]model.Node) map[string]model.Node {
+	out := make(map[string]model.Node, len(nodes))
+	for id, n := range nodes {
+		if nodeCanHoldData(n) {
+			out[id] = n
+		}
+	}
+	return out
+}
+
+func nodeCanHoldData(n model.Node) bool {
+	for _, role := range n.Roles {
+		if role == "d" {
+			return true
+		}
+	}
+	return false
 }

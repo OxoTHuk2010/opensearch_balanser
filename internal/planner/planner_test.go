@@ -23,8 +23,8 @@ func TestBuildProducesMoves(t *testing.T) {
 		ID:     "s1",
 		Health: model.ClusterHealth{Status: "green"},
 		Nodes: map[string]model.Node{
-			"a": {ID: "a", Zone: "z1", DiskTotalGB: 100, DiskUsedGB: 90},
-			"b": {ID: "b", Zone: "z2", DiskTotalGB: 100, DiskUsedGB: 20},
+			"a": {ID: "a", Zone: "z1", Roles: []string{"d"}, DiskTotalGB: 100, DiskUsedGB: 90},
+			"b": {ID: "b", Zone: "z2", Roles: []string{"d"}, DiskTotalGB: 100, DiskUsedGB: 20},
 		},
 		Shards: []model.Shard{
 			{Index: "i", ShardID: 0, Primary: false, NodeID: "a", SizeGB: 10, State: "STARTED"},
@@ -66,9 +66,9 @@ func TestBuildPrefersSmallShardMovesUnderSevereShardImbalance(t *testing.T) {
 		ID:     "s2",
 		Health: model.ClusterHealth{Status: "green"},
 		Nodes: map[string]model.Node{
-			"a": {ID: "a", Zone: "z1", DiskTotalGB: 200, DiskUsedGB: 100},
-			"b": {ID: "b", Zone: "z2", DiskTotalGB: 200, DiskUsedGB: 100},
-			"c": {ID: "c", Zone: "z3", DiskTotalGB: 200, DiskUsedGB: 20},
+			"a": {ID: "a", Zone: "z1", Roles: []string{"d"}, DiskTotalGB: 200, DiskUsedGB: 100},
+			"b": {ID: "b", Zone: "z2", Roles: []string{"d"}, DiskTotalGB: 200, DiskUsedGB: 100},
+			"c": {ID: "c", Zone: "z3", Roles: []string{"d"}, DiskTotalGB: 200, DiskUsedGB: 20},
 		},
 		Shards:     shards,
 		Watermarks: model.Watermarks{HighPercent: 95},
@@ -98,8 +98,8 @@ func TestBuildSkipsTinyShards(t *testing.T) {
 		ID:     "s3",
 		Health: model.ClusterHealth{Status: "green"},
 		Nodes: map[string]model.Node{
-			"a": {ID: "a", Zone: "z1", DiskTotalGB: 100, DiskUsedGB: 80},
-			"b": {ID: "b", Zone: "z2", DiskTotalGB: 100, DiskUsedGB: 40},
+			"a": {ID: "a", Zone: "z1", Roles: []string{"d"}, DiskTotalGB: 100, DiskUsedGB: 80},
+			"b": {ID: "b", Zone: "z2", Roles: []string{"d"}, DiskTotalGB: 100, DiskUsedGB: 40},
 		},
 		Shards: []model.Shard{
 			{Index: "tiny", ShardID: 0, Primary: false, NodeID: "a", SizeGB: 0.00001, State: "STARTED"},
@@ -127,9 +127,9 @@ func TestBuildAvoidsTargetsAboveLowWatermark(t *testing.T) {
 		ID:     "s4",
 		Health: model.ClusterHealth{Status: "green"},
 		Nodes: map[string]model.Node{
-			"a": {ID: "a", Zone: "z1", DiskTotalGB: 100, DiskUsedGB: 90},
-			"b": {ID: "b", Zone: "z2", DiskTotalGB: 100, DiskUsedGB: 86},
-			"c": {ID: "c", Zone: "z3", DiskTotalGB: 100, DiskUsedGB: 40},
+			"a": {ID: "a", Zone: "z1", Roles: []string{"d"}, DiskTotalGB: 100, DiskUsedGB: 90},
+			"b": {ID: "b", Zone: "z2", Roles: []string{"d"}, DiskTotalGB: 100, DiskUsedGB: 86},
+			"c": {ID: "c", Zone: "z3", Roles: []string{"d"}, DiskTotalGB: 100, DiskUsedGB: 40},
 		},
 		Shards: []model.Shard{
 			{Index: "i", ShardID: 0, Primary: false, NodeID: "a", SizeGB: 2, State: "STARTED"},
@@ -163,8 +163,8 @@ func TestBuildPrefersLargerMoveWhenSourceUnderTargetFreePressure(t *testing.T) {
 		ID:     "s5",
 		Health: model.ClusterHealth{Status: "green"},
 		Nodes: map[string]model.Node{
-			"a": {ID: "a", Zone: "z1", DiskTotalGB: 100, DiskUsedGB: 90}, // free=10, needs +30GB
-			"b": {ID: "b", Zone: "z2", DiskTotalGB: 100, DiskUsedGB: 30},
+			"a": {ID: "a", Zone: "z1", Roles: []string{"d"}, DiskTotalGB: 100, DiskUsedGB: 90}, // free=10, needs +30GB
+			"b": {ID: "b", Zone: "z2", Roles: []string{"d"}, DiskTotalGB: 100, DiskUsedGB: 30},
 		},
 		Shards: []model.Shard{
 			{Index: "small", ShardID: 0, Primary: false, NodeID: "a", SizeGB: 1, State: "STARTED"},
@@ -197,8 +197,8 @@ func TestBuildContinuesWhileReducingFreeSpaceDeficit(t *testing.T) {
 		ID:     "s6",
 		Health: model.ClusterHealth{Status: "green"},
 		Nodes: map[string]model.Node{
-			"a": {ID: "a", Zone: "z1", DiskTotalGB: 100, DiskUsedGB: 95}, // free=5
-			"b": {ID: "b", Zone: "z2", DiskTotalGB: 100, DiskUsedGB: 20},
+			"a": {ID: "a", Zone: "z1", Roles: []string{"d"}, DiskTotalGB: 100, DiskUsedGB: 95}, // free=5
+			"b": {ID: "b", Zone: "z2", Roles: []string{"d"}, DiskTotalGB: 100, DiskUsedGB: 20},
 		},
 		Shards: []model.Shard{
 			{Index: "x", ShardID: 0, Primary: false, NodeID: "a", SizeGB: 5, State: "STARTED"},
@@ -226,9 +226,9 @@ func TestBuildRespectsLowWatermarkSafetyMargin(t *testing.T) {
 		ID:     "s7",
 		Health: model.ClusterHealth{Status: "green"},
 		Nodes: map[string]model.Node{
-			"a": {ID: "a", Zone: "z1", DiskTotalGB: 100, DiskUsedGB: 90},
-			"b": {ID: "b", Zone: "z2", DiskTotalGB: 100, DiskUsedGB: 84.7}, // close to low=85
-			"c": {ID: "c", Zone: "z3", DiskTotalGB: 100, DiskUsedGB: 40},
+			"a": {ID: "a", Zone: "z1", Roles: []string{"d"}, DiskTotalGB: 100, DiskUsedGB: 90},
+			"b": {ID: "b", Zone: "z2", Roles: []string{"d"}, DiskTotalGB: 100, DiskUsedGB: 84.7}, // close to low=85
+			"c": {ID: "c", Zone: "z3", Roles: []string{"d"}, DiskTotalGB: 100, DiskUsedGB: 40},
 		},
 		Shards: []model.Shard{
 			{Index: "i", ShardID: 0, Primary: false, NodeID: "a", SizeGB: 0.6, State: "STARTED"},
@@ -257,8 +257,8 @@ func TestBuildUsesRankedCandidates(t *testing.T) {
 		ID:     "s8",
 		Health: model.ClusterHealth{Status: "green"},
 		Nodes: map[string]model.Node{
-			"src": {ID: "src", Zone: "z1", DiskTotalGB: 1000, DiskUsedGB: 860},
-			"dst": {ID: "dst", Zone: "z2", DiskTotalGB: 1000, DiskUsedGB: 500},
+			"src": {ID: "src", Zone: "z1", Roles: []string{"d"}, DiskTotalGB: 1000, DiskUsedGB: 860},
+			"dst": {ID: "dst", Zone: "z2", Roles: []string{"d"}, DiskTotalGB: 1000, DiskUsedGB: 500},
 		},
 		Shards: []model.Shard{
 			{Index: "small", ShardID: 0, Primary: false, NodeID: "src", SizeGB: 0.21, State: "STARTED"},
@@ -279,3 +279,34 @@ func TestBuildUsesRankedCandidates(t *testing.T) {
 		t.Fatalf("expected ranked candidates list with multiple options")
 	}
 }
+
+func TestBuildIgnoresNonDataNodes(t *testing.T) {
+	cfg := config.Default()
+	cfg.Planner.MaxMovesPerPlan = 1
+	p := New(cfg)
+	snap := model.ClusterSnapshot{
+		ID:     "s9",
+		Health: model.ClusterHealth{Status: "green"},
+		Nodes: map[string]model.Node{
+			"a":    {ID: "a", Zone: "z1", Roles: []string{"d"}, DiskTotalGB: 100, DiskUsedGB: 90},
+			"b":    {ID: "b", Zone: "z2", Roles: []string{"d"}, DiskTotalGB: 100, DiskUsedGB: 30},
+			"cord": {ID: "cord", Zone: "z3", Roles: []string{"-"}, DiskTotalGB: 20, DiskUsedGB: 0.1},
+		},
+		Shards: []model.Shard{
+			{Index: "i", ShardID: 0, Primary: false, NodeID: "a", SizeGB: 5, State: "STARTED"},
+		},
+		Watermarks: model.Watermarks{LowPercent: 85, HighPercent: 90},
+	}
+
+	pl, err := p.Build(snap, model.AnalysisResult{Score: model.Score{DiskSkewPct: 100, ShardSkewPct: 100}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(pl.Steps) == 0 {
+		t.Fatalf("expected planner to build move using data nodes")
+	}
+	if pl.Steps[0].ToNode == "cord" {
+		t.Fatalf("expected non-data node to be excluded from targets")
+	}
+}
+
