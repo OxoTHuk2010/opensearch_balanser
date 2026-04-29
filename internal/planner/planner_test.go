@@ -310,3 +310,23 @@ func TestBuildIgnoresNonDataNodes(t *testing.T) {
 	}
 }
 
+func TestPickTargetNodesSkipsNodesAboveLowWatermark(t *testing.T) {
+	cfg := config.Default()
+	cfg.Planner.LowWatermarkSafetyMarginPercent = 0.1
+	p := New(cfg)
+	snap := model.ClusterSnapshot{
+		Nodes: map[string]model.Node{
+			"src": {ID: "src", Roles: []string{"d"}, DiskTotalGB: 100, DiskUsedGB: 70},
+			"ok":  {ID: "ok", Roles: []string{"d"}, DiskTotalGB: 100, DiskUsedGB: 60},
+			"bad": {ID: "bad", Roles: []string{"d"}, DiskTotalGB: 100, DiskUsedGB: 86},
+		},
+		Watermarks: model.Watermarks{LowPercent: 85, HighPercent: 90},
+	}
+	targets := p.pickTargetNodes(snap, "src")
+	for _, id := range targets {
+		if id == "bad" {
+			t.Fatalf("expected node above low watermark to be excluded from targets")
+		}
+	}
+}
+

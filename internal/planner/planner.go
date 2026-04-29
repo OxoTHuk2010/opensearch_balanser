@@ -304,6 +304,9 @@ func (p Planner) pickTargetNodes(snapshot model.ClusterSnapshot, sourceID string
 		if id == sourceID {
 			continue
 		}
+		if !p.isTargetBelowLowWatermark(snapshot, n) {
+			continue
+		}
 		arr = append(arr, pair{id: id, diskUsed: n.DiskUsedPercent(), shards: counts[id]})
 	}
 	if len(arr) == 0 {
@@ -336,6 +339,24 @@ func (p Planner) pickTargetNodes(snapshot model.ClusterSnapshot, sourceID string
 		ids = append(ids, p.id)
 	}
 	return ids
+}
+
+func (p Planner) isTargetBelowLowWatermark(snapshot model.ClusterSnapshot, n model.Node) bool {
+	if n.DiskTotalGB <= 0 {
+		return false
+	}
+	threshold := snapshot.Watermarks.LowPercent
+	if threshold <= 0 {
+		threshold = snapshot.Watermarks.HighPercent
+	}
+	if threshold <= 0 {
+		threshold = 85
+	}
+	threshold -= p.cfg.Planner.LowWatermarkSafetyMarginPercent
+	if threshold < 0 {
+		threshold = 0
+	}
+	return n.DiskUsedPercent() < threshold
 }
 
 func (p Planner) pickShardCandidates(snapshot model.ClusterSnapshot, fromNodeID, toNodeID string) []model.Shard {
