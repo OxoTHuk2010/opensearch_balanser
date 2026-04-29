@@ -62,7 +62,15 @@ func (p Planner) Build(snapshot model.ClusterSnapshot, analysis model.AnalysisRe
 					applyMove(&candidateWork, step)
 					after := computeScore(candidateWork)
 					afterPressure := p.totalFreeDeficitGB(candidateWork)
-					if p.improvement(before, after, beforePressure, afterPressure) <= 0 {
+					impr := p.improvement(before, after, beforePressure, afterPressure)
+					if impr <= 0 {
+						// If we are below target free space on the source node, accept a
+						// safe pressure-reducing move even when composite skew score is flat.
+						if p.sourcePressureDeficitGB(work, fromID) > 0 && afterPressure < beforePressure {
+							impr = 0.000001
+						}
+					}
+					if impr <= 0 {
 						continue
 					}
 					steps = append(steps, step)
@@ -513,6 +521,22 @@ func (p Planner) totalFreeDeficitGB(snapshot model.ClusterSnapshot) float64 {
 		}
 	}
 	return total
+}
+
+func (p Planner) sourcePressureDeficitGB(snapshot model.ClusterSnapshot, nodeID string) float64 {
+	if p.cfg.Planner.TargetFreeGBPerNode <= 0 {
+		return 0
+	}
+	n, ok := snapshot.Nodes[nodeID]
+	if !ok {
+		return 0
+	}
+	free := n.DiskTotalGB - n.DiskUsedGB
+	deficit := p.cfg.Planner.TargetFreeGBPerNode - free
+	if deficit > 0 {
+		return deficit
+	}
+	return 0
 }
 
 func (p Planner) improvement(before, after model.Score, beforePressure, afterPressure float64) float64 {
