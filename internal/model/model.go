@@ -122,6 +122,7 @@ type SimulationResult struct {
 	SnapshotID      string           `json:"snapshot_id"`
 	Succeeded       bool             `json:"succeeded"`
 	Conflicts       []string         `json:"conflicts"`
+	ConflictSummary map[string]int   `json:"conflict_summary,omitempty"`
 	AllocatorChecks []AllocatorCheck `json:"allocator_checks,omitempty"`
 	ExpectedScore   Score            `json:"expected_score"`
 	Summary         string           `json:"summary"`

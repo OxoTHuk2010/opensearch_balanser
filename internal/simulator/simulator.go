@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	"opensearch-balanser/internal/collector"
@@ -48,12 +49,14 @@ func Run(ctx context.Context, cfg config.Config, adapter collector.Adapter, snap
 	if !succeeded {
 		summary = fmt.Sprintf("dry-run completed with %d conflict(s)", len(conflicts))
 	}
+	conflictSummary := summarizeConflicts(conflicts)
 
 	return model.SimulationResult{
 		RunAt:           time.Now().UTC(),
 		SnapshotID:      snapshot.ID,
 		Succeeded:       succeeded,
 		Conflicts:       conflicts,
+		ConflictSummary: conflictSummary,
 		AllocatorChecks: checks,
 		ExpectedScore:   score,
 		Summary:         summary,
@@ -134,4 +137,29 @@ func computeScore(snapshot model.ClusterSnapshot) model.Score {
 		shardSkew = ((shardMax - shardMin) / shardMax) * 100
 	}
 	return model.Score{DiskSkewPct: diskSkew, ShardSkewPct: shardSkew}
+}
+
+func summarizeConflicts(conflicts []string) map[string]int {
+	if len(conflicts) == 0 {
+		return nil
+	}
+	out := map[string]int{}
+	for _, c := range conflicts {
+		k := "other"
+		switch {
+		case strings.Contains(c, "allocator check failed"):
+			k = "allocator_check_failed"
+			if strings.Contains(c, "low watermark") {
+				k = "allocator_low_watermark"
+			}
+		case strings.Contains(c, "allocator denied"):
+			k = "allocator_denied"
+		case strings.Contains(c, "breaches watermark"):
+			k = "simulated_watermark_breach"
+		case strings.Contains(c, "missing source shard"):
+			k = "missing_source_shard"
+		}
+		out[k]++
+	}
+	return out
 }

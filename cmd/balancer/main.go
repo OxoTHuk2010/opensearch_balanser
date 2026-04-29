@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"sort"
 	"syscall"
 	"time"
 
@@ -103,6 +104,20 @@ func runDryRun(args []string) {
 		fatal(err)
 	}
 	fmt.Printf("Dry-run completed. Updated bundle written: %s\n", *out)
+	if updated.Simulation != nil {
+		fmt.Printf("Dry-run status: %s\n", updated.Simulation.Summary)
+		if len(updated.Simulation.ConflictSummary) > 0 {
+			fmt.Println("Conflict summary:")
+			keys := make([]string, 0, len(updated.Simulation.ConflictSummary))
+			for k := range updated.Simulation.ConflictSummary {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			for _, k := range keys {
+				fmt.Printf("  - %s: %d\n", k, updated.Simulation.ConflictSummary[k])
+			}
+		}
+	}
 }
 
 func runApply(args []string) {
