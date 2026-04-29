@@ -43,34 +43,39 @@ func (p Planner) Build(snapshot model.ClusterSnapshot, analysis model.AnalysisRe
 			}
 			targets := p.pickTargetNodes(work, fromID)
 			for _, toID := range targets {
-				candidate, ok := p.pickShardToMove(work, fromID, toID)
-				if !ok {
+				candidates := p.pickShardCandidates(work, fromID, toID)
+				if len(candidates) == 0 {
 					continue
 				}
-				key := shardMoveKey(candidate)
-				if movedReplicas[key] {
-					continue
+				for _, candidate := range candidates {
+					key := shardMoveKey(candidate)
+					if movedReplicas[key] {
+						continue
+					}
+					fromNode := work.Nodes[fromID]
+					toNode := work.Nodes[toID]
+					if !p.allowedTarget(work, candidate, toNode) {
+						continue
+					}
+					step := p.makeStep(candidate, fromNode, toNode)
+					candidateWork := model.CloneSnapshot(work)
+					applyMove(&candidateWork, step)
+					after := computeScore(candidateWork)
+					afterPressure := p.totalFreeDeficitGB(candidateWork)
+					if p.improvement(before, after, beforePressure, afterPressure) <= 0 {
+						continue
+					}
+					steps = append(steps, step)
+					movedReplicas[key] = true
+					work = candidateWork
+					before = after
+					beforePressure = afterPressure
+					moved = true
+					break
 				}
-				fromNode := work.Nodes[fromID]
-				toNode := work.Nodes[toID]
-				if !p.allowedTarget(work, candidate, toNode) {
-					continue
+				if moved {
+					break
 				}
-				step := p.makeStep(candidate, fromNode, toNode)
-				candidateWork := model.CloneSnapshot(work)
-				applyMove(&candidateWork, step)
-				after := computeScore(candidateWork)
-				afterPressure := p.totalFreeDeficitGB(candidateWork)
-				if p.improvement(before, after, beforePressure, afterPressure) <= 0 {
-					continue
-				}
-				steps = append(steps, step)
-				movedReplicas[key] = true
-				work = candidateWork
-				before = after
-				beforePressure = afterPressure
-				moved = true
-				break
 			}
 			if moved {
 				break
@@ -319,7 +324,7 @@ func (p Planner) pickTargetNodes(snapshot model.ClusterSnapshot, sourceID string
 	return ids
 }
 
-func (p Planner) pickShardToMove(snapshot model.ClusterSnapshot, fromNodeID, toNodeID string) (model.Shard, bool) {
+func (p Planner) pickShardCandidates(snapshot model.ClusterSnapshot, fromNodeID, toNodeID string) []model.Shard {
 	candidates := make([]model.Shard, 0)
 	for _, s := range snapshot.Shards {
 		if s.NodeID == fromNodeID {
@@ -347,9 +352,11 @@ func (p Planner) pickShardToMove(snapshot model.ClusterSnapshot, fromNodeID, toN
 		}
 	}
 
-	bestScore := math.MaxFloat64
-	best := model.Shard{}
-	found := false
+	type scored struct {
+		shard model.Shard
+		score float64
+	}
+	ranked := make([]scored, 0, len(candidates))
 	for _, c := range candidates {
 		if c.State != "STARTED" && c.State != "RELOCATING" {
 			continue
@@ -392,16 +399,17 @@ func (p Planner) pickShardToMove(snapshot model.ClusterSnapshot, fromNodeID, toN
 			usefulDrain := math.Min(c.SizeGB, sourcePressureGB)
 			score -= usefulDrain * p.cfg.Planner.MoveScorePressureSizeReward
 		}
-		if score < bestScore {
-			bestScore = score
-			best = c
-			found = true
-		}
+		ranked = append(ranked, scored{shard: c, score: score})
 	}
-	if !found {
-		return model.Shard{}, false
+	if len(ranked) == 0 {
+		return nil
 	}
-	return best, true
+	sort.Slice(ranked, func(i, j int) bool { return ranked[i].score < ranked[j].score })
+	out := make([]model.Shard, 0, len(ranked))
+	for _, r := range ranked {
+		out = append(out, r.shard)
+	}
+	return out
 }
 
 func applyMove(snapshot *model.ClusterSnapshot, step model.PlanStep) {

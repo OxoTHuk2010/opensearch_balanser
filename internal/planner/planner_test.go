@@ -245,3 +245,37 @@ func TestBuildRespectsLowWatermarkSafetyMargin(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildUsesRankedCandidates(t *testing.T) {
+	cfg := config.Default()
+	cfg.Planner.MaxMovesPerPlan = 1
+	cfg.Planner.TargetFreeGBPerNode = 200
+	cfg.Planner.PressureMinShardSizeGB = 0.1
+	p := New(cfg)
+
+	snap := model.ClusterSnapshot{
+		ID:     "s8",
+		Health: model.ClusterHealth{Status: "green"},
+		Nodes: map[string]model.Node{
+			"src": {ID: "src", Zone: "z1", DiskTotalGB: 1000, DiskUsedGB: 860},
+			"dst": {ID: "dst", Zone: "z2", DiskTotalGB: 1000, DiskUsedGB: 500},
+		},
+		Shards: []model.Shard{
+			{Index: "small", ShardID: 0, Primary: false, NodeID: "src", SizeGB: 0.21, State: "STARTED"},
+			{Index: "big", ShardID: 1, Primary: false, NodeID: "src", SizeGB: 20, State: "STARTED"},
+		},
+		Watermarks: model.Watermarks{LowPercent: 95, HighPercent: 97},
+	}
+
+	pl, err := p.Build(snap, model.AnalysisResult{Score: model.Score{DiskSkewPct: 100, ShardSkewPct: 100}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(pl.Steps) == 0 {
+		t.Fatalf("expected at least one step")
+	}
+	cands := p.pickShardCandidates(snap, "src", "dst")
+	if len(cands) < 2 {
+		t.Fatalf("expected ranked candidates list with multiple options")
+	}
+}
