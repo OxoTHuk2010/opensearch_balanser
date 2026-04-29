@@ -330,3 +330,70 @@ func TestPickTargetNodesSkipsNodesAboveLowWatermark(t *testing.T) {
 	}
 }
 
+func TestBuildPressurePhaseNeverMovesIntoDeficitNode(t *testing.T) {
+	cfg := config.Default()
+	cfg.Planner.MaxMovesPerPlan = 5
+	cfg.Planner.TargetFreeGBPerNode = 30
+	cfg.Planner.PressureMinShardSizeGB = 0.1
+	p := New(cfg)
+	snap := model.ClusterSnapshot{
+		ID:     "s10",
+		Health: model.ClusterHealth{Status: "green"},
+		Nodes: map[string]model.Node{
+			"a": {ID: "a", Zone: "z1", Roles: []string{"d"}, DiskTotalGB: 100, DiskUsedGB: 90}, // free 10 deficit 20
+			"b": {ID: "b", Zone: "z2", Roles: []string{"d"}, DiskTotalGB: 100, DiskUsedGB: 85}, // free 15 deficit 15
+			"c": {ID: "c", Zone: "z3", Roles: []string{"d"}, DiskTotalGB: 100, DiskUsedGB: 40}, // free 60
+		},
+		Shards: []model.Shard{
+			{Index: "i", ShardID: 0, Primary: false, NodeID: "a", SizeGB: 5, State: "STARTED"},
+			{Index: "i", ShardID: 1, Primary: false, NodeID: "a", SizeGB: 5, State: "STARTED"},
+			{Index: "j", ShardID: 0, Primary: false, NodeID: "b", SizeGB: 5, State: "STARTED"},
+		},
+		Watermarks: model.Watermarks{LowPercent: 95, HighPercent: 97},
+	}
+	pl, err := p.Build(snap, model.AnalysisResult{Score: model.Score{DiskSkewPct: 100, ShardSkewPct: 100}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, st := range pl.Steps {
+		if st.ToNode == "a" || st.ToNode == "b" {
+			t.Fatalf("expected no incoming moves to deficit nodes, got %+v", st)
+		}
+	}
+}
+
+func TestBuildPressurePhaseReducesDeficitEachStep(t *testing.T) {
+	cfg := config.Default()
+	cfg.Planner.MaxMovesPerPlan = 3
+	cfg.Planner.TargetFreeGBPerNode = 40
+	cfg.Planner.PressureMinShardSizeGB = 0.1
+	p := New(cfg)
+	snap := model.ClusterSnapshot{
+		ID:     "s11",
+		Health: model.ClusterHealth{Status: "green"},
+		Nodes: map[string]model.Node{
+			"src": {ID: "src", Zone: "z1", Roles: []string{"d"}, DiskTotalGB: 100, DiskUsedGB: 95}, // free 5 deficit 35
+			"dst": {ID: "dst", Zone: "z2", Roles: []string{"d"}, DiskTotalGB: 100, DiskUsedGB: 30},
+		},
+		Shards: []model.Shard{
+			{Index: "x", ShardID: 0, Primary: false, NodeID: "src", SizeGB: 5, State: "STARTED"},
+			{Index: "x", ShardID: 1, Primary: false, NodeID: "src", SizeGB: 5, State: "STARTED"},
+		},
+		Watermarks: model.Watermarks{LowPercent: 95, HighPercent: 97},
+	}
+	pl, err := p.Build(snap, model.AnalysisResult{Score: model.Score{DiskSkewPct: 100, ShardSkewPct: 100}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	work := model.CloneSnapshot(snap)
+	prev := p.totalFreeDeficitGB(work)
+	for _, st := range pl.Steps {
+		applyMove(&work, st)
+		cur := p.totalFreeDeficitGB(work)
+		if cur >= prev {
+			t.Fatalf("expected each pressure step to reduce deficit: before=%.2f after=%.2f", prev, cur)
+		}
+		prev = cur
+	}
+}
+

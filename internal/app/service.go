@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"strings"
 	"time"
@@ -64,6 +65,7 @@ func (s Service) Plan(ctx context.Context) (model.PlanBundle, error) {
 		s.rt.Metrics.Inc("planner_errors_total", nil)
 		return model.PlanBundle{}, err
 	}
+	pl = s.pruneUnsafeSteps(bundle.Snapshot, pl)
 	bundle.Plan = pl
 	s.rt.Metrics.Inc("planner_runs_total", nil)
 	s.rt.Metrics.SetGauge("planner_last_steps", float64(len(pl.Steps)), nil)
@@ -302,4 +304,51 @@ func LoadBundle(path string) (model.PlanBundle, error) {
 		return model.PlanBundle{}, err
 	}
 	return bundle, nil
+}
+
+func (s Service) pruneUnsafeSteps(snapshot model.ClusterSnapshot, plan model.RebalancePlan) model.RebalancePlan {
+	if len(plan.Steps) == 0 {
+		return plan
+	}
+	low := snapshot.Watermarks.LowPercent
+	if low <= 0 {
+		low = snapshot.Watermarks.HighPercent
+	}
+	if low <= 0 {
+		low = 85
+	}
+	low -= s.cfg.Planner.LowWatermarkSafetyMarginPercent
+	if low < 0 {
+		low = 0
+	}
+
+	filtered := make([]model.PlanStep, 0, len(plan.Steps))
+	for _, st := range plan.Steps {
+		n, ok := snapshot.Nodes[st.ToNode]
+		if !ok || n.DiskTotalGB <= 0 {
+			continue
+		}
+		if n.DiskUsedPercent() >= low {
+			continue
+		}
+		// Safety-by-default: only data nodes should be targets.
+		isData := false
+		for _, r := range n.Roles {
+			if r == "d" {
+				isData = true
+				break
+			}
+		}
+		if !isData {
+			continue
+		}
+		filtered = append(filtered, st)
+	}
+	if len(filtered) == len(plan.Steps) {
+		return plan
+	}
+	pruned := len(plan.Steps) - len(filtered)
+	plan.Steps = filtered
+	plan.Explain = fmt.Sprintf("%s | pruned_unsafe_steps=%d", plan.Explain, int(math.Max(0, float64(pruned))))
+	return plan
 }

@@ -35,7 +35,11 @@ func (p Planner) Build(snapshot model.ClusterSnapshot, analysis model.AnalysisRe
 	movedReplicas := map[string]bool{}
 
 	for i := 0; i < maxMoves; i++ {
+		pressureMode := p.totalFreeDeficitGB(work) > 0 && p.hasNonDeficitTarget(work)
 		sources := p.pickSourceNodes(work)
+		if pressureMode {
+			sources = p.pickPressureSourceNodes(work)
+		}
 		moved := false
 		for _, fromID := range sources {
 			if blockedSources[fromID] {
@@ -43,6 +47,10 @@ func (p Planner) Build(snapshot model.ClusterSnapshot, analysis model.AnalysisRe
 			}
 			targets := p.pickTargetNodes(work, fromID)
 			for _, toID := range targets {
+				if pressureMode && p.sourcePressureDeficitGB(work, toID) > 0 {
+					// Phase 1: do not move data to nodes that are still below target free space.
+					continue
+				}
 				candidates := p.pickShardCandidates(work, fromID, toID)
 				if len(candidates) == 0 {
 					continue
@@ -57,12 +65,20 @@ func (p Planner) Build(snapshot model.ClusterSnapshot, analysis model.AnalysisRe
 					if !p.allowedTarget(work, candidate, toNode) {
 						continue
 					}
+					if pressureMode && p.wouldCreateOrWorsenTargetDeficit(toNode, candidate.SizeGB) {
+						// Safety-by-default: never create/expand deficit on the receiving node.
+						continue
+					}
 					step := p.makeStep(candidate, fromNode, toNode)
 					candidateWork := model.CloneSnapshot(work)
 					applyMove(&candidateWork, step)
 					after := computeScore(candidateWork)
 					afterPressure := p.totalFreeDeficitGB(candidateWork)
 					impr := p.improvement(before, after, beforePressure, afterPressure)
+					if pressureMode && afterPressure >= beforePressure {
+						// Phase 1 must strictly reduce total free-space deficit.
+						continue
+					}
 					if impr <= 0 {
 						// If we are below target free space on the source node, accept a
 						// safe pressure-reducing move even when composite skew score is flat.
@@ -341,6 +357,27 @@ func (p Planner) pickTargetNodes(snapshot model.ClusterSnapshot, sourceID string
 	return ids
 }
 
+func (p Planner) pickPressureSourceNodes(snapshot model.ClusterSnapshot) []string {
+	type pair struct {
+		id      string
+		deficit float64
+	}
+	eligible := eligibleDataNodes(snapshot.Nodes)
+	arr := make([]pair, 0, len(eligible))
+	for id := range eligible {
+		def := p.sourcePressureDeficitGB(snapshot, id)
+		if def > 0 {
+			arr = append(arr, pair{id: id, deficit: def})
+		}
+	}
+	sort.Slice(arr, func(i, j int) bool { return arr[i].deficit > arr[j].deficit })
+	ids := make([]string, 0, len(arr))
+	for _, x := range arr {
+		ids = append(ids, x.id)
+	}
+	return ids
+}
+
 func (p Planner) isTargetBelowLowWatermark(snapshot model.ClusterSnapshot, n model.Node) bool {
 	if n.DiskTotalGB <= 0 {
 		return false
@@ -570,6 +607,36 @@ func (p Planner) sourcePressureDeficitGB(snapshot model.ClusterSnapshot, nodeID 
 		return deficit
 	}
 	return 0
+}
+
+func (p Planner) wouldCreateOrWorsenTargetDeficit(target model.Node, incomingGB float64) bool {
+	if p.cfg.Planner.TargetFreeGBPerNode <= 0 {
+		return false
+	}
+	freeBefore := target.DiskTotalGB - target.DiskUsedGB
+	freeAfter := freeBefore - incomingGB
+	defBefore := p.cfg.Planner.TargetFreeGBPerNode - freeBefore
+	if defBefore < 0 {
+		defBefore = 0
+	}
+	defAfter := p.cfg.Planner.TargetFreeGBPerNode - freeAfter
+	if defAfter < 0 {
+		defAfter = 0
+	}
+	return defAfter > defBefore
+}
+
+func (p Planner) hasNonDeficitTarget(snapshot model.ClusterSnapshot) bool {
+	if p.cfg.Planner.TargetFreeGBPerNode <= 0 {
+		return false
+	}
+	for _, n := range eligibleDataNodes(snapshot.Nodes) {
+		free := n.DiskTotalGB - n.DiskUsedGB
+		if free >= p.cfg.Planner.TargetFreeGBPerNode {
+			return true
+		}
+	}
+	return false
 }
 
 func (p Planner) improvement(before, after model.Score, beforePressure, afterPressure float64) float64 {
