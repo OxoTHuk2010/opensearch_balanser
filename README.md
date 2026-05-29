@@ -117,17 +117,19 @@ Safety-first rebalancer for distributed OpenSearch clusters with CLI + HTTP API.
 
 ## Config Notes
 
-- `cluster.endpoint` is required.
-- `runtime.data_dir` stores execution persistence files.
-- `policy.execution_window_start_utc` must be `0..23`.
-- `policy.execution_window_end_utc` must be `1..24`.
-- `api.enabled` controls API startup guard.
-- `planner.large_shard_size_gb` and `planner.large_shard_penalty_multiplier` tune large-shard move avoidance.
-- `planner.severe_shard_imbalance_threshold` and `planner.move_score_weight_shard_gap` tune shard-count balancing pressure.
-- `planner.min_move_shard_size_gb` skips negligible shard moves that do not materially improve balance.
-- `planner.target_free_gb_per_node` sets desired free disk per node (for example `300` GB).
-- `planner.node_balance_weight_pressure`, `planner.pressure_min_shard_size_gb`, and `planner.move_score_pressure_size_reward` tune aggressive drain behavior for overloaded nodes.
-- Set `policy.allow_yellow: true` to permit apply in yellow health; red remains blocked.
+Подробное русскоязычное описание каждого поля, зависимостей и формул находится в [Configuration Reference](docs/CONFIGURATION.md).
+
+- `cluster.endpoint` обязателен.
+- `runtime.data_dir` хранит persisted execution state.
+- `policy.execution_window_start_utc` должен быть в диапазоне `0..23`.
+- `policy.execution_window_end_utc` должен быть в диапазоне `1..24`.
+- `api.enabled` управляет запуском API.
+- `planner.large_shard_size_gb` и `planner.large_shard_penalty_multiplier` настраивают избегание больших shard moves.
+- `planner.severe_shard_imbalance_threshold` и `planner.move_score_weight_shard_gap` настраивают давление на выравнивание shard count.
+- `planner.min_move_shard_size_gb` пропускает слишком маленькие shard moves, которые не дают заметного улучшения баланса.
+- `planner.target_free_gb_per_node` задает желаемый свободный объем диска на ноду, например `300` GB.
+- `planner.node_balance_weight_pressure`, `planner.pressure_min_shard_size_gb` и `planner.move_score_pressure_size_reward` настраивают aggressive drain для перегруженных нод.
+- `policy.allow_yellow: true` разрешает apply при yellow health; red health все равно блокируется.
 
 ## Observability
 
@@ -145,6 +147,7 @@ Safety-first rebalancer for distributed OpenSearch clusters with CLI + HTTP API.
 
 - [API](API.md)
 - [Operations Runbook](OPERATIONS.md)
+- [Configuration Reference](docs/CONFIGURATION.md)
 - [Security](SECURITY.md)
 - [Changelog](CHANGELOG.md)
 - [ADR 0001](docs/adr/0001-safety-first-gates.md)

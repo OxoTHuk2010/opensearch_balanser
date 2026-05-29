@@ -1,63 +1,219 @@
 cluster:
+  # Бэкенд для сбора состояния, dry-run проверки и выполнения reroute.
+  # Сейчас код поддерживает "opensearch"; другое значение требует отдельного адаптера.
   backend: opensearch
+
+  # Базовый URL OpenSearch. Обязательное поле.
+  # Используется для всех запросов collector/executor; завершающий "/" не нужен.
   endpoint: https://opensearch.example.internal:9200
+
+  # Пользователь Basic Auth.
+  # Для audit/plan/dry-run лучше использовать read-only доступ, для apply - отдельный write-scoped доступ.
+  # Если пусто, запросы уходят без Basic Auth.
   username: balancer
+
+  # Имя переменной окружения с паролем.
+  # В конфигурации хранится только имя переменной; значение читается через os.Getenv.
   password_env: OPENSEARCH_PASSWORD
+
+  # Включает TLS-настройки HTTP-клиента OpenSearch.
+  # Если false, ca_file и skip_tls_verify не влияют на transport.
   tls_enabled: true
+
+  # Отключает проверку сертификата сервера при tls_enabled=true.
+  # В production держать false; true допустимо только для контролируемых тестовых кластеров.
   skip_tls_verify: false
+
+  # PEM-файл CA для проверки сертификата при tls_enabled=true.
+  # Если пусто, используется системное хранилище доверенных CA.
   ca_file: /etc/pki/opensearch/ca.pem
+
+  # Таймаут одного HTTP-запроса к OpenSearch: сбор состояния, dry-run reroute, apply reroute.
+  # Больше значение лучше переносит медленный кластер, но дольше держит зависшие операции.
   request_timeout: 15s
+
+  # Максимум активных recovery/relocation операций, после которого plan/apply блокируются.
+  # Planner и safety сравнивают: snapshot.active_operations > max_active_recoveries.
+  # Меньше значение безопаснее; больше разрешает больший churn в кластере.
   max_active_recoveries: 20
 
 planner:
+  # Верхняя граница количества шагов в плане.
+  # Если limits.max_churn_per_run не задан или <= 0, он нормализуется к этому значению.
   max_moves_per_plan: 50
+
+  # Вес заполненности целевой ноды в estimated_cost.score:
+  # score = weight_cost * (networkGB + diskIOGB + cpuUnits) + weight_disk * targetDiskPercent.
+  # Чем выше, тем дороже в артефакте плана выглядят перемещения на более заполненные ноды.
   weight_disk: 0.45
+
+  # Зарезервированный вес shard-count skew для совместимости модели скоринга.
+  # В текущем ранжировании используются node_balance_weight_shards и move_score_weight_shard_gap.
   weight_shards: 0.35
+
+  # Зарезервированный вес риска для совместимости модели скоринга.
+  # Сейчас риск входит через analyzer risk_penalty, а не напрямую через это поле.
   weight_risk: 0.15
+
+  # Вес стоимости network/diskIO/cpu в estimated_cost.score:
+  # score = weight_cost * (networkGB + diskIOGB + cpuUnits) + weight_disk * targetDiskPercent.
+  # Чем выше, тем дороже в артефакте плана выглядят большие shard moves.
   weight_cost: 0.05
+
+  # Разница количества шард между source и target, после которой imbalance считается severe.
+  # Если shard большой, включается дополнительный множитель штрафа.
   severe_shard_imbalance_threshold: 50
+
+  # Размер shard в GB, начиная с которого shard считается большим.
+  # Большие shard получают large_shard_penalty_multiplier; малые используют сырой размер как penalty.
   large_shard_size_gb: 20
+
+  # Множитель штрафа для больших shard.
+  # Больше значение сильнее избегает больших перемещений; меньше делает их вероятнее.
   large_shard_penalty_multiplier: 3
+
+  # Вес disk usage при сортировке source и target нод.
+  # Работает вместе с node_balance_weight_shards и node_balance_weight_pressure; важны относительные веса.
   node_balance_weight_disk: 0.6
+
+  # Вес количества shard при сортировке source и target нод.
+  # Увеличивайте, если важнее выравнивать shard count, чем disk usage.
   node_balance_weight_shards: 0.4
+
+  # Вес post-move disk-percent gap при ранжировании кандидата:
+  # candidateScore += afterDiskGap * move_score_weight_disk_gap.
+  # Чем выше, тем сильнее planner выбирает moves, уменьшающие disk skew.
   move_score_weight_disk_gap: 1.0
+
+  # Вес post-move shard-count gap при ранжировании кандидата:
+  # candidateScore += afterShardGap * move_score_weight_shard_gap.
+  # Чем выше, тем сильнее planner выбирает moves, уменьшающие shard skew.
   move_score_weight_shard_gap: 2.0
+
+  # Вес size penalty при ранжировании кандидата:
+  # candidateScore += sizePenalty * move_score_weight_size.
+  # Чем выше, тем сильнее planner предпочитает маленькие shard moves.
   move_score_weight_size: 0.5
+
+  # Штраф к candidateScore, если shard является primary.
+  # Чем выше, тем сильнее planner предпочитает перемещать replica перед primary.
   move_score_primary_penalty: 1000
+
+  # Дополнительный множитель для больших shard при severe shard imbalance:
+  # sizePenalty = shardSizeGB * large_shard_penalty_multiplier * move_score_severe_large_shard_extra_mult.
+  # Чем выше, тем меньше шанс исправлять shard-count imbalance перемещением очень больших shard.
   move_score_severe_large_shard_extra_mult: 4.0
+
+  # Минимальный размер shard, который можно включать в план.
+  # Shard меньше этого значения игнорируются как не дающие заметного улучшения баланса.
   min_move_shard_size_gb: 0.01
+
+  # Желаемый свободный объем диска на data node в GB.
+  # Если нода ниже цели, а другая data node может принять данные, включается pressure mode.
+  # Формула дефицита: deficitGB = max(0, target_free_gb_per_node - nodeFreeGB).
   target_free_gb_per_node: 300
+
+  # Вес free-space pressure в сортировке source нод и оценке improvement.
+  # improvement = baseSkewImprovement + pressureGainGB * node_balance_weight_pressure.
+  # Чем выше, тем сильнее planner фокусируется на draining нод ниже target_free_gb_per_node.
   node_balance_weight_pressure: 1.2
+
+  # Минимальный размер shard для pressure mode.
+  # Не дает тратить moves на слишком маленькие shard при освобождении места на перегруженной ноде.
   pressure_min_shard_size_gb: 0.5
+
+  # Награда в candidateScore за полезный drain:
+  # candidateScore -= min(shardSizeGB, sourceDeficitGB) * move_score_pressure_size_reward.
+  # Чем выше, тем сильнее выбираются shard, быстро уменьшающие дефицит source ноды.
   move_score_pressure_size_reward: 4.0
+
+  # Safety margin, вычитаемый из OpenSearch low watermark перед выбором target:
+  # effectiveLowWatermark = lowWatermarkPercent - low_watermark_safety_margin_percent.
+  # Чем выше, тем больше свободный запас и тем меньше eligible target нод.
   low_watermark_safety_margin_percent: 0.5
 
 limits:
+  # Максимум параллельных shard moves в одном batch.
+  # Также ограничивает concurrency goroutine при apply. Меньше значение снижает нагрузку на кластер.
   max_concurrent_moves: 2
+
+  # Максимальный суммарный объем перемещаемых shard в одном batch, GB.
+  # Новый batch начинается, если следующий move превысит этот лимит.
   max_data_gb_per_batch: 100
+
+  # Пауза между batch в секундах.
+  # Дает OpenSearch стабилизироваться и позволяет stop-условиям сработать до следующего batch.
   cooldown_seconds: 10
+
+  # Задуманный лимит churn за один run.
+  # Текущий executor это поле не применяет; если поле <= 0, оно нормализуется к planner.max_moves_per_plan.
   max_churn_per_run: 200
 
 policy:
+  # Разрешает apply при yellow health.
+  # Red всегда блокируется. Если true, stop_on_health_degrade не остановит green->yellow.
   allow_yellow: false
+
+  # Критический процент заполнения диска.
+  # Analyzer создает overflow findings на этом пороге, а safety может остановить apply при пересечении порога.
   critical_disk_percent: 92
+
+  # Останавливает apply после batch, если health стал хуже baseline.
+  # Зависит от allow_yellow для сценария green->yellow.
   stop_on_health_degrade: true
+
+  # Останавливает apply после batch, если нода пересекла critical_disk_percent.
+  # Использует baseline snapshot, чтобы отличать уже плохое состояние от нового ухудшения.
   stop_on_watermark_breach: true
+
+  # Ограничивает apply UTC-окном ниже.
+  # Plan и dry-run этим флагом не блокируются.
   enforce_execution_window: false
+
+  # Начало UTC-окна apply, включительно.
+  # Активно только при enforce_execution_window=true. Допустимый диапазон: 0..23.
   execution_window_start_utc: 0
+
+  # Конец UTC-окна apply, не включительно.
+  # Активно только при enforce_execution_window=true. Допустимый диапазон: 1..24.
+  # Текущая реализация ожидает start < end и не моделирует окно через полночь.
   execution_window_end_utc: 24
 
 runtime:
+  # Требует подтверждение оператора перед каждым batch в CLI apply.
+  # force mode и API apply не показывают интерактивный prompt, но safety preflight все равно выполняется.
   require_manual_approval: true
+
+  # Включает dry-run проверки allocator OpenSearch во время simulation, если adapter доступен.
+  # Если false, simulation быстрее, но не ловит allocator-level отказы.
   check_allocator: true
+
+  # Каталог для persisted execution state.
+  # File execution store пишет сюда executions.json.
   data_dir: ./data
 
 api:
+  # Разрешает запуск HTTP API.
+  # serve-api завершится без запуска, если значение false.
   enabled: true
+
+  # Адрес HTTP API.
+  # Примеры: ":8080" для всех интерфейсов, "127.0.0.1:8080" только для локального доступа.
   listen: :8080
+
+  # Read timeout HTTP-сервера.
+  # Увеличивайте для медленных клиентов или больших request body; держите ограниченным от зависших соединений.
   read_timeout: 15s
+
+  # Write timeout HTTP-сервера.
+  # Должен покрывать длительность медленных plan/simulate/apply-start ответов.
   write_timeout: 60s
 
 observability:
+  # Путь к structured JSON audit log.
+  # Runtime создает родительский каталог и пишет сюда lifecycle events.
   audit_sink_path: ./data/audit.log
+
+  # Уровень логирования runtime.
+  # Для обычной эксплуатации используйте "info"; более подробные уровни могут увеличить объем логов.
   log_level: info
