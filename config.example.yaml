@@ -42,17 +42,19 @@ planner:
   # Если limits.max_churn_per_run не задан или <= 0, он нормализуется к этому значению.
   max_moves_per_plan: 50
 
-  # Вес заполненности целевой ноды в estimated_cost.score:
+  # Вес disk skew в gate принятия move и вес заполненности целевой ноды в estimated_cost.score:
   # score = weight_cost * (networkGB + diskIOGB + cpuUnits) + weight_disk * targetDiskPercent.
   # Чем выше, тем дороже в артефакте плана выглядят перемещения на более заполненные ноды.
   weight_disk: 0.45
 
-  # Зарезервированный вес shard-count skew для совместимости модели скоринга.
-  # В текущем ранжировании используются node_balance_weight_shards и move_score_weight_shard_gap.
+  # Вес shard-count skew в gate принятия move:
+  # baseSkewImprovement сравнивает weightedScore(before) и weightedScore(after).
+  # Уменьшайте, если нужно разрешать disk-relief moves, которые временно ухудшают shard count.
   weight_shards: 0.35
 
-  # Зарезервированный вес риска для совместимости модели скоринга.
-  # Сейчас риск входит через analyzer risk_penalty, а не напрямую через это поле.
+  # Вес risk_penalty в gate принятия move:
+  # weightedScore = weight_disk*diskSkew + weight_shards*shardSkew + weight_risk*riskPenalty.
+  # Увеличивайте, если risk reduction должен быть важнее чистого disk/shard skew.
   weight_risk: 0.15
 
   # Вес стоимости network/diskIO/cpu в estimated_cost.score:

@@ -99,13 +99,18 @@ candidateScore =
 Move принимается, только если улучшает skew или, в pressure mode, строго уменьшает общий free-space deficit:
 
 ```text
-baseImprovement =
-  (beforeDiskSkewPct + beforeShardSkewPct + beforeRiskPenalty) -
-  (afterDiskSkewPct + afterShardSkewPct + afterRiskPenalty)
+weightedScore =
+  weight_disk * diskSkewPct +
+  weight_shards * shardSkewPct +
+  weight_risk * riskPenalty
+
+baseImprovement = weightedScore(before) - weightedScore(after)
 
 pressureGainGB = beforeTotalFreeDeficitGB - afterTotalFreeDeficitGB
 improvement = baseImprovement + pressureGainGB * node_balance_weight_pressure
 ```
+
+Если `weight_disk`, `weight_shards` и `weight_risk` все равны `0`, planner использует fallback на старую сырую сумму `diskSkewPct + shardSkewPct + riskPenalty`. Для сценария, где shard count уже выровнен, но disk usage сильно перекошен, увеличивайте `weight_disk` и уменьшайте `weight_shards`, иначе ухудшение shard count может заблокировать полезный disk-relief move.
 
 ## Поля конфигурации
 
@@ -128,9 +133,9 @@ improvement = baseImprovement + pressureGainGB * node_balance_weight_pressure
 | Поле | Значение | Эффект изменения |
 | --- | --- | --- |
 | `max_moves_per_plan` | Максимальное число шагов в плане. | Больше значение создает более длинные планы. Реальный apply batch все равно ограничивается `limits.*`. |
-| `weight_disk` | Вес target disk usage в estimated cost шага. | Больше значение делает moves на заполненные target nodes дороже в plan artifact. |
-| `weight_shards` | Зарезервированный вес shard score. | Сейчас напрямую не используется; shard balance управляется `node_balance_weight_shards` и `move_score_weight_shard_gap`. |
-| `weight_risk` | Зарезервированный вес риска. | Сейчас напрямую не используется; risk входит через analyzer `risk_penalty`. |
+| `weight_disk` | Вес disk skew в gate принятия move и target disk usage в estimated cost шага. | Больше значение помогает принимать moves, которые снижают disk skew, и делает moves на заполненные target nodes дороже в plan artifact. |
+| `weight_shards` | Вес shard skew в gate принятия move. | Меньше значение позволяет disk-relief moves, которые временно ухудшают shard count; больше значение жестче защищает shard-count balance. |
+| `weight_risk` | Вес risk penalty в gate принятия move. | Больше значение делает снижение risk penalty важнее чистого disk/shard skew. |
 | `weight_cost` | Вес network/diskIO/CPU в estimated cost. | Больше значение делает большие moves дороже в plan artifact. |
 | `severe_shard_imbalance_threshold` | Shard-count gap, который включает severe imbalance. | Меньше значение чаще включает дополнительное избегание больших shard. |
 | `large_shard_size_gb` | Размер, с которого shard считается большим. | Меньше значение относит больше shard к большим и сильнее ограничивает их moves. |

@@ -41,6 +41,59 @@ func TestBuildProducesMoves(t *testing.T) {
 	}
 }
 
+func TestBuildCanImproveDiskSkewWhenShardCountsAreBalanced(t *testing.T) {
+	cfg := config.Default()
+	cfg.Planner.MaxMovesPerPlan = 2
+	cfg.Planner.WeightDisk = 1
+	cfg.Planner.WeightShards = 0
+	cfg.Planner.WeightRisk = 0
+	cfg.Planner.NodeBalanceWeightDisk = 5
+	cfg.Planner.NodeBalanceWeightShards = 0
+	cfg.Planner.MoveScoreWeightDiskGap = 5
+	cfg.Planner.MoveScoreWeightShardGap = 0
+	cfg.Planner.MoveScoreWeightSize = 0
+	cfg.Planner.MoveScorePrimaryPenalty = 0
+	p := New(cfg)
+
+	snap := model.ClusterSnapshot{
+		ID:     "disk-skew",
+		Health: model.ClusterHealth{Status: "green"},
+		Nodes: map[string]model.Node{
+			"hot":  {ID: "hot", Zone: "z1", Roles: []string{"d"}, DiskTotalGB: 1000, DiskUsedGB: 900},
+			"cold": {ID: "cold", Zone: "z2", Roles: []string{"d"}, DiskTotalGB: 1000, DiskUsedGB: 200},
+		},
+		Shards: []model.Shard{
+			{Index: "heavy-a", ShardID: 0, Primary: false, NodeID: "hot", SizeGB: 120, State: "STARTED"},
+			{Index: "heavy-a", ShardID: 1, Primary: false, NodeID: "hot", SizeGB: 100, State: "STARTED"},
+			{Index: "heavy-b", ShardID: 0, Primary: false, NodeID: "hot", SizeGB: 80, State: "STARTED"},
+			{Index: "heavy-b", ShardID: 1, Primary: false, NodeID: "hot", SizeGB: 60, State: "STARTED"},
+			{Index: "tiny-a", ShardID: 0, Primary: false, NodeID: "cold", SizeGB: 1, State: "STARTED"},
+			{Index: "tiny-a", ShardID: 1, Primary: false, NodeID: "cold", SizeGB: 1, State: "STARTED"},
+			{Index: "tiny-b", ShardID: 0, Primary: false, NodeID: "cold", SizeGB: 1, State: "STARTED"},
+			{Index: "tiny-b", ShardID: 1, Primary: false, NodeID: "cold", SizeGB: 1, State: "STARTED"},
+		},
+		Watermarks: model.Watermarks{LowPercent: 85, HighPercent: 90},
+	}
+
+	before := computeScore(snap)
+	if before.ShardSkewPct != 0 {
+		t.Fatalf("test setup must start with balanced shard counts, got %.2f", before.ShardSkewPct)
+	}
+	pl, err := p.Build(snap, model.AnalysisResult{Score: before})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(pl.Steps) == 0 {
+		t.Fatalf("expected disk-skew move even when shard counts start balanced")
+	}
+	if pl.Steps[0].FromNode != "hot" || pl.Steps[0].ToNode != "cold" {
+		t.Fatalf("expected hot->cold disk relief move, got %+v", pl.Steps[0])
+	}
+	if pl.After.DiskSkewPct >= before.DiskSkewPct {
+		t.Fatalf("expected disk skew to improve: before=%.2f after=%.2f", before.DiskSkewPct, pl.After.DiskSkewPct)
+	}
+}
+
 func TestBuildPrefersSmallShardMovesUnderSevereShardImbalance(t *testing.T) {
 	cfg := config.Default()
 	cfg.Planner.MaxMovesPerPlan = 1
@@ -396,4 +449,3 @@ func TestBuildPressurePhaseReducesDeficitEachStep(t *testing.T) {
 		prev = cur
 	}
 }
-

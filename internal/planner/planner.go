@@ -640,13 +640,25 @@ func (p Planner) hasNonDeficitTarget(snapshot model.ClusterSnapshot) bool {
 }
 
 func (p Planner) improvement(before, after model.Score, beforePressure, afterPressure float64) float64 {
-	base := improvement(before, after)
+	base := p.weightedImprovement(before, after)
 	if p.cfg.Planner.TargetFreeGBPerNode <= 0 {
 		return base
 	}
 	pressureGain := beforePressure - afterPressure
 	// Use pressure weight to keep planner moving while target-free deficit is being reduced.
 	return base + pressureGain*p.cfg.Planner.NodeBalanceWeightPressure
+}
+
+func (p Planner) weightedImprovement(before, after model.Score) float64 {
+	diskWeight := math.Max(0, p.cfg.Planner.WeightDisk)
+	shardWeight := math.Max(0, p.cfg.Planner.WeightShards)
+	riskWeight := math.Max(0, p.cfg.Planner.WeightRisk)
+	if diskWeight == 0 && shardWeight == 0 && riskWeight == 0 {
+		return improvement(before, after)
+	}
+	beforeScore := before.DiskSkewPct*diskWeight + before.ShardSkewPct*shardWeight + before.RiskPenalty*riskWeight
+	afterScore := after.DiskSkewPct*diskWeight + after.ShardSkewPct*shardWeight + after.RiskPenalty*riskWeight
+	return beforeScore - afterScore
 }
 
 func shardMoveKey(s model.Shard) string {
